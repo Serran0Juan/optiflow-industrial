@@ -1,0 +1,25 @@
+# Dependencias
+node_modules/
+
+# Builds de Next.js
+.next/
+out/
+build/
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+
+# Archivos de sistema y editor
+.DS_Store
+*.pem
+npm-debug.log*
+
+# Artefactos de TypeScript
+*.tsbuildinfo
+next-env.d.ts
+node_modules/
+.next/
+**/.next/
+.env*
