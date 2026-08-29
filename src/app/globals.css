@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-steel-800 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-navy-800;
+    text-wrap: balance;
+  }
+
+  ::selection {
+    @apply bg-navy-100 text-navy-900;
+  }
+}
+
+@layer components {
+  /* Tabla de datos operativos: densa, legible y con scroll horizontal propio. */
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .data-table thead th {
+    @apply whitespace-nowrap border-b border-line bg-steel-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-steel-500;
+  }
+
+  .data-table tbody td {
+    @apply border-b border-line px-3 py-2 align-middle text-steel-700;
+  }
+
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .data-table tbody tr:hover {
+    @apply bg-steel-50;
+  }
+
+  .numeric {
+    @apply text-right tabular-nums;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scroll-x {
+    @apply -mx-1 overflow-x-auto px-1;
+  }
+}
+
+/* Slider del simulador de escenarios */
+input[type="range"] {
+  @apply h-1.5 w-full cursor-pointer appearance-none rounded-full bg-steel-200;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  @apply h-4 w-4 appearance-none rounded-full border-2 border-white bg-navy-600 shadow;
+}
+
+input[type="range"]::-moz-range-thumb {
+  @apply h-4 w-4 appearance-none rounded-full border-2 border-white bg-navy-600 shadow;
+}
+
+input[type="range"]:focus-visible {
+  @apply outline-none ring-2 ring-navy-400 ring-offset-2;
+}
+
+input[type="range"]:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
