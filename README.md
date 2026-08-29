@@ -234,7 +234,3 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 - Conexión con una fuente de datos real
 
 ---
-
-## Autor y propósito
-
-Proyecto desarrollado como portfolio aplicado de Ingeniería Industrial, con foco en operaciones, planeamiento, supply chain, mejora continua y automatización de decisiones.
