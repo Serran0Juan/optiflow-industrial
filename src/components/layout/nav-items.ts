@@ -1,4 +1,11 @@
-import { BookOpen, Boxes, CalendarRange, LayoutDashboard, SlidersHorizontal } from "lucide-react";
+import {
+  BookOpen,
+  Boxes,
+  CalendarRange,
+  LayoutDashboard,
+  Scale,
+  SlidersHorizontal,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavItem {
@@ -30,6 +37,13 @@ export const NAV_ITEMS: NavItem[] = [
     shortLabel: "Inventario",
     description: "Cobertura de producto terminado, materias primas y proveedores.",
     icon: Boxes,
+  },
+  {
+    href: "/balanceo",
+    label: "Balanceo de linea",
+    shortLabel: "Balanceo",
+    description: "Takt time, carga por estacion, cuello de botella y eficiencia de linea.",
+    icon: Scale,
   },
   {
     href: "/simulador",

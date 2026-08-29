@@ -63,3 +63,8 @@ export function formatSignedCurrency(value: number): string {
 export function formatMinutes(value: number): string {
   return `${formatNumber(Math.round(value), 0)} min`;
 }
+
+/** Segundos por unidad: usado por el modulo de balanceo de linea. */
+export function formatSeconds(value: number, decimals = 1): string {
+  return `${formatNumber(value, decimals)} s`;
+}

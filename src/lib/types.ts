@@ -343,3 +343,168 @@ export interface PlanningResult {
   materials: MaterialCoverage[];
   computedInMs: number;
 }
+
+/* ================================================================== */
+/* V1.1 - Balanceo de linea de ensamble                                */
+/* Caso simulado independiente del planificador semanal: una linea de  */
+/* ensamble de envases dosificadores con tareas, precedencias y takt.  */
+/* ================================================================== */
+
+export type StageId = "PRE" | "ENS" | "LLE" | "CAL" | "EMB";
+
+export interface TaskStage {
+  id: StageId;
+  name: string;
+  description: string;
+  /** Color hexadecimal usado en graficos y tarjetas de estacion. */
+  color: string;
+  /** Clases utilitarias de Tailwind para los chips de etapa. */
+  badgeClass: string;
+}
+
+export interface AssemblyTask {
+  id: string;
+  code: string;
+  name: string;
+  stageId: StageId;
+  /** Tiempo estandar base de la tarea, en segundos por unidad. */
+  standardSeconds: number;
+  /** Tareas que deben completarse antes o en la misma estacion. */
+  predecessorIds: string[];
+  /** Estacion (base 0) en la asignacion inicial desbalanceada. */
+  initialStationIndex: number;
+}
+
+export interface AssemblyLineCase {
+  id: string;
+  name: string;
+  description: string;
+  product: string;
+  stages: TaskStage[];
+  tasks: AssemblyTask[];
+  initialStationCount: number;
+  baseDailyDemandUnits: number;
+  /** Minutos productivos por turno (jornada menos paradas planificadas). */
+  baseShiftMinutes: number;
+  baseShiftCount: number;
+  /** Costo horario cargado de un operario con su puesto (ARS simulados). */
+  stationCostPerHour: number;
+  /** Costo de una unidad de demanda que la linea no llega a producir. */
+  unmetUnitCost: number;
+}
+
+export interface BalanceScenario {
+  /** Variacion sobre la demanda diaria base (-20 a +30). */
+  demandVariationPct: number;
+  /** Minutos productivos por turno. */
+  shiftMinutes: number;
+  /** Cantidad de turnos por dia (1, 2 o 3). */
+  shiftCount: number;
+  /** Habilita una estacion adicional para bajar el tiempo de ciclo. */
+  extraStation: boolean;
+  /** Variacion sobre los tiempos estandar (-10 a +20). */
+  taskTimeVariationPct: number;
+}
+
+export interface BalanceScenarioPreset {
+  id: string;
+  name: string;
+  description: string;
+  scenario: BalanceScenario;
+}
+
+export type BalanceLayoutId = "inicial" | "recomendado";
+
+export interface StationTask {
+  taskId: string;
+  code: string;
+  name: string;
+  stageId: StageId;
+  seconds: number;
+}
+
+export interface BalanceStation {
+  index: number;
+  label: string;
+  tasks: StationTask[];
+  /** Suma de los tiempos estandar asignados a la estacion. */
+  loadSeconds: number;
+  /** Ociosidad respecto del tiempo de ciclo de la linea. */
+  idleSeconds: number;
+  /** Carga como fraccion del takt time (puede superar 1). */
+  taktRatio: number;
+  isBottleneck: boolean;
+}
+
+export interface BalanceMetrics {
+  stationCount: number;
+  /** Mayor carga entre las estaciones: marca el ritmo real de la linea. */
+  cycleSeconds: number;
+  totalWorkSeconds: number;
+  taktSeconds: number;
+  availableSeconds: number;
+  dailyDemandUnits: number;
+  theoreticalMinStations: number;
+  dailyCapacityUnits: number;
+  lineEfficiency: number;
+  balanceLoss: number;
+  idleSecondsPerCycle: number;
+  capacityGapUnits: number;
+  deliveredUnits: number;
+  unmetUnits: number;
+  bottleneckStationIndex: number;
+}
+
+export interface BalanceCost {
+  /** Costo diario de las estaciones/operarios asignados. */
+  stationCost: number;
+  /** Parte del costo de estaciones imputable al desbalance (no se suma aparte). */
+  idleCost: number;
+  productiveCost: number;
+  unmetCost: number;
+  /** costo de estaciones + costo de unidades no atendidas. */
+  total: number;
+  costPerDeliveredUnit: number;
+}
+
+export interface BalanceLayout {
+  id: BalanceLayoutId;
+  label: string;
+  description: string;
+  stations: BalanceStation[];
+  metrics: BalanceMetrics;
+  cost: BalanceCost;
+  notes: string[];
+}
+
+export interface BalanceTaskRow {
+  task: AssemblyTask;
+  /** Tiempo estandar con la variacion del escenario aplicada. */
+  seconds: number;
+  positionalWeight: number;
+  initialStation: number;
+  recommendedStation: number;
+}
+
+export interface BalanceComparison {
+  initial: BalanceLayout;
+  recommended: BalanceLayout;
+  /** costo total inicial - costo total recomendado (puede ser negativo). */
+  costDelta: number;
+  costDeltaPct: number;
+  improves: boolean;
+  /** Diferencias recomendado - inicial. */
+  efficiencyDeltaPoints: number;
+  cycleDeltaSeconds: number;
+  capacityDeltaUnits: number;
+  stationDelta: number;
+  unmetDeltaUnits: number;
+}
+
+export interface BalanceResult {
+  scenario: BalanceScenario;
+  taskRows: BalanceTaskRow[];
+  comparison: BalanceComparison;
+  insights: string[];
+  computedInMs: number;
+}

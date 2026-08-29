@@ -14,6 +14,13 @@ export const CHART_COLORS = {
   positive: "#1f9569",
   grid: "#e2e8f0",
   axis: "#8fa3b8",
+  // Balanceo de linea (V1.1)
+  station: "#7d9bbe",
+  stationBottleneck: "#234269",
+  stationOverTakt: "#c03c33",
+  takt: "#1b3352",
+  capacity: "#4d74a1",
+  efficiency: "#1f9569",
 };
 
 export const AXIS_PROPS = {

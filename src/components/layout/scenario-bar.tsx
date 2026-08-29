@@ -21,7 +21,7 @@ export function ScenarioBar() {
   ];
 
   return (
-    <div className="flex flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-2">
+    <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge variant="navy" title="Variacion aplicada a la demanda proyectada">
           Demanda {scenario.demandVariationPct >= 0 ? "+" : ""}
@@ -53,14 +53,14 @@ export function ScenarioBar() {
         </Badge>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <SelectField
           label="Escenario"
           hideLabel
           value={presetId}
           options={options}
           onChange={applyPreset}
-          className="min-w-[200px]"
+          className="min-w-[150px] flex-1 sm:min-w-[200px] sm:flex-none"
         />
         <Button variant="outline" size="sm" onClick={recalculate} title="Recalcular el escenario activo">
           <RefreshCw className="h-3.5 w-3.5" aria-hidden />

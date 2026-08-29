@@ -73,7 +73,8 @@ npm run verify
 2. **Plan de producción** — vista semanal por día y línea, con familia, unidades, minutos, setups y horas extra; comparación completa contra el plan base; y el detalle de cada corrida con la regla que la generó.
 3. **Inventario y abastecimiento** — cobertura por producto terminado, consumo de materias primas según la BOM y exposición por proveedor.
 4. **Simulador de escenarios** — variación de demanda (−20% a +30%), reducción de capacidad, aumento de tiempos de setup, multiplicador del costo de faltante y habilitación de horas extra, más tres presets. Todo recalcula el modelo completo.
-5. **Metodología** — problema, supuestos, estructura de datos, lógica de priorización, fórmula económica, desperdicios Lean abordados, limitaciones y roadmap V2.
+5. **Balanceo de línea** (V1.1) — caso simulado de una línea de ensamble de 16 tareas: takt time, carga por estación contra el takt, cuello de botella, eficiencia de línea, pérdida por desbalance, brecha de capacidad y costo estimado. Compara la distribución inicial desbalanceada contra el balance recomendado por heurística de peso posicional.
+6. **Metodología** — problema, supuestos, estructura de datos, lógica de priorización, fórmula económica, balanceo de línea y capacidad, desperdicios Lean abordados, limitaciones y roadmap V2.
 
 ---
 
@@ -117,12 +118,58 @@ Si el resultado es negativo, la aplicación lo informa como **empeoramiento del 
 
 ---
 
+## V1.1 — Módulo de balanceo de línea
+
+Segundo caso simulado, independiente del planificador semanal: una **línea de ensamble de envases dosificadores** con 16 tareas, 5 etapas (preparación, ensamble, llenado, control de calidad y embalaje) y 16 relaciones de precedencia explícitas.
+
+### Cálculos
+
+```
+tiempo_disponible_diario = minutos_por_turno × 60 × cantidad_de_turnos
+takt_time                = tiempo_disponible_diario / demanda_diaria
+contenido_de_trabajo     = Σ tiempo_estándar(tarea)
+estaciones_teóricas_mín  = techo(contenido_de_trabajo / takt_time)
+tiempo_de_ciclo          = máx(carga_total(estación))
+capacidad_diaria         = piso(tiempo_disponible_diario / tiempo_de_ciclo)
+eficiencia_de_línea      = contenido_de_trabajo / (estaciones × tiempo_de_ciclo)
+pérdida_por_desbalance   = 1 − eficiencia_de_línea
+tiempo_ocioso_por_ciclo  = (estaciones × tiempo_de_ciclo) − contenido_de_trabajo
+brecha_de_capacidad      = capacidad_diaria − demanda_diaria
+```
+
+### Modelo económico del módulo
+
+```
+costo_estaciones  = estaciones × (tiempo_disponible_diario / 3600) × 14.500
+costo_no_atendido = unidades_no_atendidas × 2.800
+costo_total       = costo_estaciones + costo_no_atendido
+
+costo_del_ocio    = costo_estaciones × pérdida_por_desbalance   (indicador, NO se suma)
+diferencia        = costo_total(inicial) − costo_total(recomendado)
+```
+
+El **costo del tiempo ocioso no se suma como concepto aparte**: es la porción del costo de estaciones que se paga sin agregar valor. Sumarlo además del costo de estaciones contaría dos veces el mismo peso. Cuando la diferencia es favorable se informa siempre como **diferencia estimada dentro del caso simulado**; si es negativa, como empeoramiento del escenario.
+
+### Heurística: peso posicional (RPW)
+
+1. Peso posicional de cada tarea = tiempo propio + tiempo de todas sus sucesoras (cierre transitivo).
+2. Orden por peso posicional descendente, con desempate por código de tarea.
+3. Se carga la estación abierta con la primera tarea elegible que entre en el límite de ciclo; tras cada colocación se vuelve a recorrer desde la de mayor peso.
+4. Precedencias siempre respetadas: una tarea sólo se asigna si todas sus predecesoras ya lo están.
+5. Se abre una estación nueva cuando ninguna tarea elegible entra en el remanente.
+6. **Pasada de suavizado**: con la cantidad de estaciones ya definida, se busca el menor tiempo de ciclo entero que siga entrando en ellas.
+
+No es un óptimo matemático: el balanceo de líneas (SALBP) es NP-difícil y el peso posicional es una regla constructiva golosa. La aplicación lo declara como **recomendación heurística** en la pantalla y en la metodología.
+
+---
+
 ## Estructura del proyecto
 
 ```
 src/
-  app/                        Rutas (App Router): dashboard, plan, inventario, simulador, metodología
+  app/                        Rutas (App Router): dashboard, plan, inventario, simulador, balanceo, metodología
   components/
+    balance/                  Tablero de estaciones y tablas del balanceo de línea (V1.1)
     charts/                   Gráficos Recharts y paleta compartida
     dashboard/                Alertas y resumen de decisiones
     inventory/                Tablas de producto terminado, materias primas y proveedores
@@ -134,6 +181,14 @@ src/
       config.ts               Parámetros del caso: líneas, costos, productos, BOM, proveedores
       generate.ts             Generador determinista del dataset
       dataset.ts              Dataset único e índices de acceso
+      line-config.ts          Parámetros del caso de balanceo: tareas, precedencias, turnos, costos
+      assembly-line.ts        Caso de línea validado (sin ciclos) e índices de sucesoras
+    balance/
+      metrics.ts              Fórmulas: takt, ciclo, capacidad, eficiencia, desbalance y costo
+      heuristic.ts            Peso posicional (RPW), asignación y pasada de suavizado
+      insights.ts             Lecturas operativas deterministas
+      scenarios.ts            Presets y normalización del escenario de balanceo
+      index.ts                runBalance(): orquestación del módulo
     planning/
       forecast.ts             Pronóstico de demanda a partir del historial
       context.ts              Contexto de planificación ajustado por escenario
@@ -145,7 +200,8 @@ src/
       index.ts                runPlanning(): orquestación del ciclo completo
     dates.ts, format.ts, rng.ts, types.ts, utils.ts
   state/
-    scenario-context.tsx      Estado global del escenario activo
+    scenario-context.tsx      Estado global del escenario de planificación
+    use-balance-scenario.ts   Estado del escenario de balanceo de línea
 scripts/
   verify.ts                   Verificación de reproducibilidad y coherencia
 ```

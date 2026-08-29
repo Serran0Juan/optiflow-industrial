@@ -10,7 +10,11 @@ import {
   STOCKOUT_PENALTY_RATE,
 } from "@/lib/data/config";
 import { dataset } from "@/lib/data/dataset";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { formatCurrency, formatNumber, formatPercent, formatSeconds } from "@/lib/format";
+import { runBalance } from "@/lib/balance";
+import { BALANCE_PRESETS } from "@/lib/balance/scenarios";
+import { assemblyLine, PRECEDENCE_COUNT } from "@/lib/data/assembly-line";
+import { STATION_COST_PER_HOUR, UNMET_UNIT_COST } from "@/lib/data/line-config";
 
 const SECTIONS = [
   { id: "problema", label: "Problema abordado" },
@@ -18,6 +22,7 @@ const SECTIONS = [
   { id: "datos", label: "Tablas y variables" },
   { id: "priorizacion", label: "Logica de priorizacion" },
   { id: "economia", label: "Formula economica" },
+  { id: "balanceo", label: "Balanceo de linea" },
   { id: "lean", label: "Desperdicios Lean" },
   { id: "limitaciones", label: "Limitaciones de la V1" },
   { id: "roadmap", label: "Roadmap V2" },
@@ -47,6 +52,11 @@ function Formula({ children }: { children: ReactNode }) {
 
 export default function MethodologyPage() {
   const holdingExample = dataset.products[0];
+  // Referencia del modulo de balanceo: preset "Operacion estable", calculado
+  // con las mismas funciones que usa la pagina, sin numeros escritos a mano.
+  const balanceReference = runBalance(BALANCE_PRESETS[0].scenario);
+  const balanceInitial = balanceReference.comparison.initial;
+  const balanceRecommended = balanceReference.comparison.recommended;
 
   return (
     <div className="space-y-6">
@@ -450,6 +460,341 @@ costo_evitado      = costo_total(plan base) - costo_total(plan recomendado)`}</F
             hora extra, en el orden en que fueron programados. Por eso la utilizacion nunca supera el
             100%: el exceso se reporta por separado como horas extra.
           </p>
+        </div>
+      </Section>
+
+      <Section
+        id="balanceo"
+        title="Balanceo de linea y capacidad"
+        description="Segundo caso simulado (V1.1): como se reparte el contenido de trabajo de una linea de ensamble entre estaciones y que capacidad resulta de esa decision."
+      >
+        <p>
+          El modulo de <strong>Balanceo de linea</strong> trabaja sobre un caso distinto del
+          planificador semanal: una linea de ensamble de {assemblyLine.tasks.length} tareas que
+          fabrica {assemblyLine.product.toLowerCase()}. Aca la pregunta no es que producir, sino{" "}
+          <strong>como repartir el trabajo entre puestos</strong> para que la linea sostenga el ritmo
+          que exige la demanda sin pagar capacidad que no se usa.
+        </p>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">Conceptos base</h3>
+          <dl className="space-y-2.5">
+            <div>
+              <dt className="font-medium text-navy-800">Takt time</dt>
+              <dd>
+                El ritmo que <em>impone la demanda</em>: cada cuantos segundos tiene que salir una
+                unidad para cumplir el programa. Es tiempo disponible dividido demanda. No depende de
+                como este armada la linea; es un objetivo, no un resultado.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-navy-800">Tiempo de ciclo</dt>
+              <dd>
+                El ritmo que <em>logra la linea</em>: la carga de la estacion mas cargada. Una unidad
+                no puede avanzar mas rapido que el puesto mas lento. Si el tiempo de ciclo supera al
+                takt time, la linea no llega a la demanda por mucho que se apure el resto de los
+                puestos.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-navy-800">Relacion de precedencia</dt>
+              <dd>
+                Una tarea que no puede empezar hasta que otra termino: no se puede roscar la tapa
+                antes de llenar el envase. Cualquier asignacion valida debe colocar cada tarea en la
+                misma estacion que sus predecesoras o en una posterior. Es la restriccion que impide
+                repartir el trabajo libremente.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-navy-800">Eficiencia de linea</dt>
+              <dd>
+                Que porcentaje del tiempo pagado se dedica efectivamente a trabajar: contenido total
+                de trabajo sobre el tiempo total ofrecido por las estaciones (estaciones por tiempo
+                de ciclo).
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-navy-800">Perdida por desbalance</dt>
+              <dd>
+                El complemento de la eficiencia. Es el tiempo que las estaciones menos cargadas pasan
+                esperando al cuello de botella: se paga igual y no produce nada.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-navy-800">Cuello de botella</dt>
+              <dd>
+                La estacion de mayor carga. Fija el tiempo de ciclo y, con el, la capacidad diaria de
+                toda la linea.
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">Formulas del modulo</h3>
+          <Formula>{`tiempo_disponible_diario = minutos_por_turno x 60 x cantidad_de_turnos
+takt_time                = tiempo_disponible_diario / demanda_diaria
+contenido_de_trabajo     = SUM( tiempo_estandar(tarea) )
+estaciones_teoricas_min  = techo( contenido_de_trabajo / takt_time )
+tiempo_de_ciclo          = MAX( carga_total(estacion) )
+capacidad_diaria         = piso( tiempo_disponible_diario / tiempo_de_ciclo )
+eficiencia_de_linea      = contenido_de_trabajo / ( estaciones x tiempo_de_ciclo )
+perdida_por_desbalance   = 1 - eficiencia_de_linea
+tiempo_ocioso_por_ciclo  = ( estaciones x tiempo_de_ciclo ) - contenido_de_trabajo
+brecha_de_capacidad      = capacidad_diaria - demanda_diaria`}</Formula>
+          <p className="mt-2">
+            Con el escenario de referencia &quot;{BALANCE_PRESETS[0].name}&quot;:{" "}
+            {formatNumber(balanceRecommended.metrics.dailyDemandUnits)} unidades diarias y{" "}
+            {formatNumber(balanceRecommended.metrics.availableSeconds / 3600, 1)} horas disponibles
+            dan un takt time de {formatSeconds(balanceRecommended.metrics.taktSeconds)}. El contenido
+            de trabajo es de {formatSeconds(balanceRecommended.metrics.totalWorkSeconds)}, de modo que
+            el minimo teorico es de {formatNumber(balanceRecommended.metrics.theoreticalMinStations)}{" "}
+            estaciones.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">Modelo economico del modulo</h3>
+          <Formula>{`costo_estaciones   = estaciones x ( tiempo_disponible_diario / 3600 ) x ${formatNumber(STATION_COST_PER_HOUR)}
+costo_no_atendido  = unidades_no_atendidas x ${formatNumber(UNMET_UNIT_COST)}
+costo_total        = costo_estaciones + costo_no_atendido
+
+costo_del_ocio     = costo_estaciones x perdida_por_desbalance   (indicador, NO se suma)
+diferencia         = costo_total(inicial) - costo_total(recomendado)`}</Formula>
+          <p className="mt-2">
+            El <strong>costo del tiempo ocioso no se suma como un concepto aparte</strong>: es la
+            porcion del costo de estaciones que se paga sin agregar valor. Sumarlo ademas del costo de
+            estaciones contaria dos veces el mismo peso e inflaria artificialmente la diferencia entre
+            las dos distribuciones. Se informa como indicador y como apertura del grafico de costo.
+          </p>
+          <p>
+            La diferencia tiene una unica definicion: costo total de la distribucion inicial menos
+            costo total del balance recomendado, bajo el mismo escenario. Si el resultado es negativo
+            se muestra como empeoramiento del escenario, nunca como ahorro. Cuando es favorable se la
+            informa siempre como <strong>diferencia estimada dentro del caso simulado</strong>, no
+            como un ahorro real.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Metodo heuristico: peso posicional (RPW)
+          </h3>
+          <ol className="ml-5 list-decimal space-y-1.5">
+            <li>
+              Se calcula el <strong>peso posicional</strong> de cada tarea: su tiempo estandar mas el
+              de todas sus sucesoras, directas e indirectas. Mide cuanto trabajo queda colgando de esa
+              tarea.
+            </li>
+            <li>
+              Se ordenan las tareas por peso posicional descendente. El desempate por codigo mantiene
+              el resultado determinista.
+            </li>
+            <li>
+              Se abre una estacion y se recorre la lista colocando la primera tarea que{" "}
+              <em>entre en el limite de ciclo</em> y cuyas predecesoras ya esten asignadas. Cada vez
+              que se coloca una tarea se vuelve a recorrer desde el principio, porque esa asignacion
+              pudo habilitar tareas antes bloqueadas.
+            </li>
+            <li>
+              Cuando ninguna tarea elegible entra en el remanente, se cierra la estacion y se abre
+              otra. El limite nunca baja de la tarea mas larga: si lo hiciera, esa tarea no entraria
+              en ninguna estacion.
+            </li>
+            <li>
+              <strong>Pasada de suavizado.</strong> La primera pasada usa el takt time como limite y
+              define cuantas estaciones hacen falta. Con esa cantidad fija, se busca el menor tiempo
+              de ciclo entero que siga entrando en ellas: reparte la carga, baja el cuello de botella
+              y sube la capacidad sin agregar personal. Si el escenario habilita una estacion
+              adicional, el objetivo pasa a ser una estacion mas y el ciclo puede acortarse aun mas, a
+              costa de un operario extra.
+            </li>
+          </ol>
+          <p className="mt-2">
+            En la referencia estable la distribucion inicial trabaja con{" "}
+            {formatNumber(balanceInitial.metrics.stationCount)} estaciones y un ciclo de{" "}
+            {formatSeconds(balanceInitial.metrics.cycleSeconds)} (
+            {formatPercent(balanceInitial.metrics.lineEfficiency)} de eficiencia), y el balance
+            recomendado llega a {formatSeconds(balanceRecommended.metrics.cycleSeconds)} con{" "}
+            {formatNumber(balanceRecommended.metrics.stationCount)} estaciones (
+            {formatPercent(balanceRecommended.metrics.lineEfficiency)}).
+          </p>
+        </div>
+
+        <Note tone="info" title="Es una heuristica, no un optimo">
+          El balanceo de lineas de ensamble (problema SALBP) es NP-dificil. El peso posicional es una
+          regla constructiva golosa: entrega una solucion buena y explicable en un paso, pero{" "}
+          <strong>no garantiza el minimo numero de estaciones ni el minimo tiempo de ciclo</strong>.
+          Por eso el resultado se llama siempre <strong>balance recomendado por heuristica</strong> y
+          la aplicacion muestra el minimo teorico como referencia, no como promesa.
+        </Note>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">Datos del caso simulado</h3>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th>Variable</th>
+                <th>Valor</th>
+                <th>Comentario</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="font-medium text-navy-800">Tareas</td>
+                <td className="numeric">{assemblyLine.tasks.length}</td>
+                <td>Secuencia completa del ensamble, con tiempo estandar en segundos.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Etapas</td>
+                <td className="numeric">{assemblyLine.stages.length}</td>
+                <td>{assemblyLine.stages.map((stage) => stage.name).join(", ")}.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Relaciones de precedencia</td>
+                <td className="numeric">{PRECEDENCE_COUNT}</td>
+                <td>Se validan al construir el caso: sin ciclos y compatibles con la asignacion inicial.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Demanda diaria base</td>
+                <td className="numeric">{formatNumber(assemblyLine.baseDailyDemandUnits)} u</td>
+                <td>Ajustable entre -20% y +30% desde el escenario.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Tiempo por turno</td>
+                <td className="numeric">{formatNumber(assemblyLine.baseShiftMinutes)} min</td>
+                <td>Jornada de 8 h menos refrigerio, arranque, limpieza y reuniones de piso.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Turnos por dia</td>
+                <td className="numeric">{assemblyLine.baseShiftCount}</td>
+                <td>Configurable en 1, 2 o 3 turnos.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Costo por hora de estacion</td>
+                <td className="numeric">{formatCurrency(assemblyLine.stationCostPerHour)}</td>
+                <td>
+                  <strong>Supuesto del caso:</strong> operario, puesto y servicios, en pesos
+                  simulados.
+                </td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Costo por unidad no atendida</td>
+                <td className="numeric">{formatCurrency(assemblyLine.unmetUnitCost)}</td>
+                <td>
+                  <strong>Supuesto del caso:</strong> margen de contribucion perdido por cada unidad
+                  que la linea no llega a producir.
+                </td>
+              </tr>
+            </tbody>
+          </TableWrap>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Desperdicios Lean que expone el balanceo
+          </h3>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th>Desperdicio</th>
+                <th>Como aparece en la linea simulada</th>
+                <th>Como lo mide el modulo</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="font-medium text-navy-800">Espera</td>
+                <td>
+                  Los puestos livianos terminan antes y esperan a que el cuello de botella libere la
+                  pieza.
+                </td>
+                <td>Ociosidad por estacion y tiempo ocioso por ciclo.</td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Tiempo ocioso</td>
+                <td>Horas de operario pagadas que no agregan valor por el desbalance de cargas.</td>
+                <td>
+                  Perdida por desbalance y su valorizacion como porcion del costo de estaciones.
+                </td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Sobreproduccion</td>
+                <td>
+                  Puestos rapidos que siguen produciendo por delante del cuello de botella sin que la
+                  linea entregue mas.
+                </td>
+                <td>
+                  Comparacion de la carga de cada estacion contra el takt time: producir por debajo
+                  del takt no aumenta la salida.
+                </td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Inventario en proceso (WIP)</td>
+                <td>Material acumulado delante de la estacion mas cargada.</td>
+                <td>
+                  Identificacion del cuello de botella y de la diferencia de carga entre estaciones
+                  contiguas.
+                </td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">Incumplimiento de demanda</td>
+                <td>La linea no alcanza el volumen comprometido con comercial.</td>
+                <td>
+                  Brecha de capacidad, unidades no atendidas y su costo con el supuesto declarado.
+                </td>
+              </tr>
+              <tr>
+                <td className="font-medium text-navy-800">
+                  Movimientos administrativos por replanificacion
+                </td>
+                <td>Rehacer el balanceo en planillas cada vez que cambia la demanda o el turno.</td>
+                <td>
+                  El escenario completo se recalcula de forma determinista y cada tarea queda con su
+                  peso posicional y su estacion asignada a la vista.
+                </td>
+              </tr>
+            </tbody>
+          </TableWrap>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Limitaciones del modulo de balanceo
+          </h3>
+          <ul className="ml-5 list-disc space-y-1.5">
+            <li>
+              <strong>Caso sintetico.</strong> Las {assemblyLine.tasks.length} tareas, sus tiempos,
+              sus precedencias y los costos fueron construidos para el portfolio. No corresponden a
+              ninguna linea real.
+            </li>
+            <li>
+              <strong>Tiempos estandar sin variabilidad estocastica.</strong> Cada tarea dura siempre
+              exactamente lo mismo: no se modelan distribuciones, fatiga, curva de aprendizaje ni
+              microparadas. Una linea real necesita colchones que el modelo no calcula.
+            </li>
+            <li>
+              <strong>Sin ergonomia ni layout fisico.</strong> No se verifica si las tareas que caen
+              en una misma estacion son compatibles en espacio, herramientas, altura de trabajo o
+              esfuerzo del operario.
+            </li>
+            <li>
+              <strong>Sin calidad en detalle.</strong> No se modelan scrap, retrabajo ni el efecto de
+              un rechazo sobre el flujo aguas abajo.
+            </li>
+            <li>
+              <strong>Sin optimizacion matematica exacta.</strong> Es una heuristica constructiva: no
+              entrega cota de optimalidad ni explora asignaciones alternativas.
+            </li>
+            <li>
+              <strong>Una sola linea, un solo producto.</strong> No hay modelos mixtos, ni estaciones
+              en paralelo, ni buffers entre puestos.
+            </li>
+            <li>
+              <strong>Sin ordenes de compra ni dotacion real.</strong> Habilitar una estacion supone
+              que el operario esta disponible; no se modela contratacion ni curva de arranque.
+            </li>
+          </ul>
         </div>
       </Section>
 

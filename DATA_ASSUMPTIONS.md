@@ -7,6 +7,7 @@ Este documento describe **cómo se construyen los datos** de OptiFlow Industrial
 - **Moneda:** pesos argentinos **simulados**, sin inflación intra-semana.
 - **Horizonte de planificación:** 5 días hábiles, del lunes 2 al viernes 6 de marzo de 2026.
 - **Historial de demanda:** 90 días hábiles previos al horizonte (1.620 registros).
+- **Caso de balanceo de línea (V1.1):** datos fijos, no generados con semilla. Ver sección 8.
 
 ---
 
@@ -284,3 +285,124 @@ Estos valores son **decisiones de modelado**, no resultados de una optimización
 7. **BOM por familia**, no por SKU.
 8. **Sin persistencia.** No hay base de datos ni histórico de escenarios: todo vive en memoria durante la sesión.
 9. **El plan base es deliberadamente simple.** Una planta real suele aplicar algo de agrupamiento por familia, por lo que la brecha entre ambos planes sería menor que la que muestra el caso. La diferencia de costo que informa la aplicación mide la distancia contra *esa* referencia explícita, no contra "la industria".
+
+---
+
+## 8. Caso de balanceo de línea (V1.1)
+
+Caso simulado **independiente** del planificador semanal. No comparte datos con él: es otra planta, otro producto y otra decisión.
+
+- **Producto:** envase dosificador de 500 ml para limpiadores líquidos.
+- **Línea:** `LN-DOSI-01`, sincrónica, un solo modelo, sin buffers entre puestos.
+- **Datos fijos, no generados con semilla.** A diferencia del caso semanal, las 16 tareas y sus tiempos están escritos a mano en `src/lib/data/line-config.ts`: son pocos y se buscó que sean legibles y verificables uno por uno.
+- **Validación en build.** `src/lib/data/assembly-line.ts` verifica que ninguna precedencia apunte a una tarea inexistente, que el grafo no tenga ciclos (orden topológico de Kahn) y que la asignación inicial no viole ninguna precedencia. Si algo falla, el build se rompe en lugar de producir un balance inválido.
+
+### 8.1 Tareas y precedencias
+
+| Código | Tarea | Etapa | Tiempo estándar (s) | Predecesoras | Estación inicial |
+| --- | --- | --- | ---: | --- | ---: |
+| T01 | Alimentar envase a la cinta | Preparación | 16 | — | E1 |
+| T02 | Inspeccionar envase (rebabas y fisuras) | Preparación | 13 | T01 | E1 |
+| T03 | Soplado y limpieza interior | Preparación | 10 | T02 | E1 |
+| T04 | Alimentar tapas y cuerpos de dosificador | Preparación | 14 | — | E1 |
+| T05 | Preensamblar cuerpo del dosificador | Ensamble | 27 | T04 | E2 |
+| T06 | Insertar tubo de succión a medida | Ensamble | 22 | T05 | E2 |
+| T07 | Verificar carrera del pulsador | Control de calidad | 12 | T06 | E2 |
+| T08 | Posicionar envase bajo la boquilla | Llenado | 9 | T03 | E3 |
+| T09 | Dosificar producto (llenado volumétrico) | Llenado | 31 | T08 | E3 |
+| T10 | Verificar nivel y purgar goteo | Llenado | 15 | T09 | E3 |
+| T11 | Colocar dosificador y roscar tapa | Ensamble | 19 | T07, T10 | E4 |
+| T12 | Torquear tapa al par especificado | Ensamble | 17 | T11 | E4 |
+| T13 | Control de torque y hermeticidad | Control de calidad | 21 | T12 | E4 |
+| T14 | Colocar etiqueta frontal y dorsal | Embalaje | 18 | T13 | E5 |
+| T15 | Empaquetar en caja de 12 unidades | Embalaje | 24 | T14 | E5 |
+| T16 | Paletizar y flejar | Embalaje | 20 | T15 | E6 |
+
+**Contenido total de trabajo: 288 s por unidad.** Tarea más larga: T09 con 31 s (fija el piso del tiempo de ciclo).
+
+El grafo tiene dos ramas que convergen: la preparación y el llenado del envase (T01→T02→T03→T08→T09→T10) por un lado, y el subensamble del dosificador (T04→T05→T06→T07) por otro. Ambas se unen en T11, que no puede empezar hasta que existan el envase lleno y el dosificador armado.
+
+### 8.2 Asignación inicial (deliberadamente desbalanceada)
+
+| Estación | Tareas | Carga (s) |
+| --- | --- | ---: |
+| E1 | T01, T02, T03, T04 | 53 |
+| E2 | T05, T06, T07 | **61** |
+| E3 | T08, T09, T10 | 55 |
+| E4 | T11, T12, T13 | 57 |
+| E5 | T14, T15 | 42 |
+| E6 | T16 | 20 |
+
+Reproduce cómo suele armarse una línea en la práctica: **bloques por etapa del proceso, en el orden en que ocurre**, sin comparar la carga de cada puesto contra el takt time. Respeta todas las precedencias, pero concentra 61 s en E2 y deja 20 s en E6.
+
+Con la demanda de referencia el takt time es de 60 s, así que **E2 no llega al ritmo requerido**: el tiempo de ciclo de 61 s deja la capacidad en 885 u/día contra una demanda de 900.
+
+### 8.3 Parámetros de operación
+
+| Parámetro | Valor base | Rango en el simulador |
+| --- | ---: | --- |
+| Demanda diaria | 900 u | −20% a +30% (paso 5%) |
+| Minutos productivos por turno | 450 min | 360 a 480 min (paso 15) |
+| Turnos por día | 2 | 1, 2 o 3 |
+| Variación de tiempos estándar | 0% | −10% a +20% (paso 5%) |
+| Estación adicional | deshabilitada | on / off |
+
+Los 450 minutos son una jornada de 8 h menos refrigerio, arranque, limpieza de fin de turno y reuniones de piso. Con 2 turnos, el tiempo disponible diario es de **54.000 s (15 h)** y el takt time de **60 s por unidad**.
+
+### 8.4 Supuestos económicos
+
+| Parámetro | Valor | Qué representa |
+| --- | ---: | --- |
+| Costo por hora de estación | $ 14.500 | Operario, puesto de trabajo y servicios, costo cargado |
+| Costo por unidad no atendida | $ 2.800 | Margen de contribución perdido por unidad que la línea no llega a producir |
+
+Ambos son **supuestos declarados del caso**, no valores relevados. Están en `src/lib/data/line-config.ts` y se muestran en la pantalla y en la metodología.
+
+```
+costo_estaciones  = estaciones × (tiempo_disponible_diario / 3600) × 14.500
+costo_no_atendido = unidades_no_atendidas × 2.800
+costo_total       = costo_estaciones + costo_no_atendido
+
+costo_del_ocio    = costo_estaciones × pérdida_por_desbalance   (indicador, NO se suma)
+diferencia        = costo_total(inicial) − costo_total(recomendado)
+```
+
+**El costo del tiempo ocioso no es un sumando.** Es la porción del costo de estaciones que se paga sin agregar valor. Se informa como indicador y como apertura del gráfico de composición, pero sumarlo además del costo de estaciones contaría dos veces el mismo peso — el mismo error de doble conteo que se corrigió en el modelo económico del planificador semanal.
+
+### 8.5 Escenarios predefinidos
+
+| Preset | Demanda | Min/turno | Turnos | Tiempos | Estación extra |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Operación estable | +0% | 450 | 2 | +0% | no |
+| Pico de demanda | +30% | 450 | 2 | +0% | no |
+| Restricción de capacidad | +5% | 390 | 2 | +15% | no |
+
+Resultados de referencia (calculados por `npm run verify`):
+
+| Preset | Takt | Ciclo ini. → rec. | Estaciones ini. → rec. | Eficiencia ini. → rec. | No atendidas ini. → rec. | Diferencia |
+| --- | ---: | --- | --- | --- | --- | ---: |
+| Operación estable | 60,0 s | 61,0 → 56,0 s | 6 → 6 | 78,7% → 85,7% | 15 → 0 u | $ 42.000 |
+| Pico de demanda | 46,2 s | 61,0 → 46,0 s | 6 → 7 | 78,7% → 89,4% | 285 → 0 u | $ 580.500 |
+| Restricción de capacidad | 49,5 s | 70,2 → 48,3 s | 6 → 8 | 78,7% → 85,8% | 279 → 0 u | $ 404.200 |
+
+### 8.6 Parámetros de la heurística de balanceo
+
+| Decisión de modelado | Valor | Función |
+| --- | --- | --- |
+| Regla de prioridad | Peso posicional (RPW) | Tiempo propio + tiempo de todas las sucesoras |
+| Desempate | Código de tarea ascendente | Garantiza que el resultado sea determinista |
+| Límite de la primera pasada | Takt time | Define cuántas estaciones hacen falta para la demanda |
+| Piso del límite de ciclo | Tarea más larga | Por debajo, esa tarea no entraría en ninguna estación |
+| Pasada de suavizado | Barrido entero ascendente | Menor ciclo que siga entrando en la cantidad de estaciones objetivo |
+| Estación adicional | +1 sobre la primera pasada | Permite apuntar a un ciclo más corto a costa de un operario |
+
+### 8.7 Limitaciones del módulo de balanceo
+
+1. **Caso sintético.** Tareas, tiempos, precedencias y costos fueron construidos para el portfolio. No corresponden a ninguna línea real.
+2. **Tiempos estándar sin variabilidad estocástica.** Cada tarea dura siempre exactamente lo mismo: no se modelan distribuciones, fatiga, curva de aprendizaje ni microparadas. Una línea real necesita colchones que el modelo no calcula.
+3. **Sin ergonomía ni layout físico.** No se verifica si las tareas que caen en una misma estación son compatibles en espacio, herramientas, altura de trabajo o esfuerzo.
+4. **Sin calidad en detalle.** No se modelan scrap, retrabajo ni el efecto de un rechazo aguas abajo.
+5. **Sin optimización matemática exacta.** El balanceo de líneas (SALBP) es NP-difícil; el peso posicional es una regla constructiva golosa que no entrega cota de optimalidad.
+6. **Una sola línea, un solo modelo.** No hay modelos mixtos, estaciones en paralelo ni buffers entre puestos.
+7. **La dotación se supone disponible.** Habilitar una estación no modela contratación, curva de arranque ni polivalencia.
+8. **La asignación inicial es deliberadamente simple**, igual que el plan base del módulo semanal: una línea real suele estar algo mejor nivelada, por lo que la diferencia contra una operación real sería menor que la que muestra el caso.

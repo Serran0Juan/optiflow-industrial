@@ -89,7 +89,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <nav
-            className="scroll-x flex gap-1 border-t border-line px-2 py-2 lg:hidden"
+            className="scroll-x mx-0 flex gap-1 border-t border-line px-2 py-2 lg:hidden"
             aria-label="Navegacion principal (movil)"
           >
             {NAV_ITEMS.map((item) => {
