@@ -39,12 +39,12 @@ OptiFlow Industrial modela estas tensiones de forma explícita y muestra, en pes
 
 | Módulo | Funcionalidad |
 | --- | --- |
-| Dashboard | KPI ejecutivos de costo, nivel de servicio, setups y utilización de capacidad |
+| Dashboard | KPI ejecutivos de costo, nivel de servicio, setups, utilización y **OEE** (disponibilidad × desempeño × calidad) |
 | Plan de producción | Comparación entre un plan base (orden comercial fijo) y un plan recomendado por heurística |
 | Inventario | Stock de producto terminado, consumo proyectado, producción planificada y riesgo de quiebre |
-| Simulador | Variación de demanda, reducción de capacidad, aumento de setups, multiplicador de faltante y horas extra |
-| Balanceo de línea | Takt time, precedencias entre tareas, asignación a estaciones, eficiencia y cuello de botella |
-| Torre de abastecimiento | Cobertura de materia prima, lead time de proveedores, clasificación de riesgo y recomendaciones de compra con aprobación humana |
+| Simulador | Variación de demanda, reducción de capacidad, aumento de setups, multiplicador de faltante, horas extra y **regla de secuenciamiento** (riesgo / EDD / SPT / ratio crítico) |
+| Balanceo de línea | Takt time, precedencias, asignación a estaciones, eficiencia, cuello de botella y **Ley de Little** (rb, T0, WIP crítico y cotas de throughput) |
+| Torre de abastecimiento | **Análisis ABC**, **stock de seguridad estadístico** por nivel de servicio, políticas (Q,r) y (S,R), cobertura, lead time, riesgo de quiebre y recomendaciones de compra con aprobación humana |
 | Metodología | Supuestos del caso, fórmulas de cada módulo, límites conocidos y roadmap |
 
 ---
@@ -53,8 +53,12 @@ OptiFlow Industrial modela estas tensiones de forma explícita y muestra, en pes
 
 **Ingeniería Industrial y operaciones**
 - Planeamiento y control de la producción (PCP)
-- Gestión de inventarios y cobertura de stock
-- Supply chain: lead time, punto de pedido, riesgo de proveedor
+- Gestión de inventarios: análisis ABC, políticas de revisión continua (Q,r) y periódica (S,R)
+- Stock de seguridad estadístico por nivel de servicio (factor Z sobre el desvío de la demanda durante el lead time)
+- Supply chain: lead time, punto de pedido, posición de inventario, riesgo de proveedor
+- Medición de capacidad efectiva con OEE
+- Factory Physics: Ley de Little, tasa de cuello de botella, WIP crítico
+- Reglas de despacho y secuenciamiento (EDD, SPT, ratio crítico)
 - Balanceo de línea (SALBP) y cálculo de takt time
 - Análisis de capacidad y utilización de recursos
 - Mejora continua y Lean Manufacturing (identificación de desperdicios)
@@ -76,16 +80,21 @@ OptiFlow Industrial modela estas tensiones de forma explícita y muestra, en pes
 - Nivel de servicio y unidades no atendidas
 - Costo total y su desagregación: setup, horas extra, inventario, faltantes
 - Utilización de capacidad por línea
+- OEE por línea y de planta, con sus tres componentes y la descomposición de pérdidas
 
 **Balanceo de línea**
 - Takt time y tiempo de ciclo
 - Número teórico mínimo de estaciones
 - Eficiencia de línea y pérdida por desbalance
 - Tiempo ocioso por estación
+- Tasa de cuello de botella (rb), tiempo neto de proceso (T0) y WIP crítico (W0 = rb × T0)
 
 **Torre de abastecimiento**
+- Clase ABC y participación en el consumo valorizado
 - Cobertura de inventario (días de consumo disponibles)
-- Punto de pedido
+- Posición de inventario (existencia + ordenado en firme − comprometido)
+- Punto de pedido *r* y techo de stock *R*, según la política de la clase
+- Stock de seguridad estadístico, con su descomposición entre variabilidad del consumo y del plazo
 - Brecha entre cobertura y lead time del proveedor
 - Costo de la compra sugerida frente al costo estimado de no actuar
 
@@ -97,7 +106,11 @@ El **planificador heurístico** recibe el mismo contexto (demanda, capacidad, co
 
 El **balanceo de línea** calcula el takt time como el tiempo disponible dividido por la demanda diaria, y asigna tareas a estaciones respetando todas las precedencias mediante la regla del **peso posicional (RPW)**: cada tarea se prioriza por su propio tiempo más el de todas sus tareas sucesoras, lo que agrupa el trabajo hacia el principio del proceso sin violar el orden productivo.
 
-La **torre de abastecimiento** clasifica el riesgo de cada material distinguiendo un quiebre evitable (se resuelve comprando dentro del horizonte) de uno inevitable (el stock se agota antes de que cualquier compra nueva pueda llegar). A partir de esa clasificación, un motor de reglas explícito —no un modelo de lenguaje— arma una recomendación de compra con su razón, su costo y su fecha límite de decisión.
+La **torre de abastecimiento** parte de un análisis ABC sobre el consumo valorizado: los materiales de clase A concentran el 80% del valor y se gestionan con revisión continua (Q,r), los de clase B y C con revisión periódica (S,R). El **stock de seguridad no se fija en días de cobertura**: se calcula como `Z × σ_plazo`, donde Z sale del nivel de servicio exigido a la clase del material y `σ_plazo` combina la variabilidad del consumo con la del plazo de entrega. Sobre esa base, clasifica el riesgo distinguiendo un quiebre evitable (se resuelve comprando dentro del horizonte) de uno inevitable (el stock se agota antes de que cualquier compra nueva pueda llegar), y un motor de reglas explícito —no un modelo de lenguaje— arma la recomendación de compra con su razón, su costo y su fecha límite de decisión.
+
+El **OEE** mide la capacidad efectiva separando las tres pérdidas que suelen esconderse entre sí: disponibilidad (paradas y cambios de formato), desempeño (tiempo habilitado sin trabajo programado) y calidad (rendimiento de primera pasada).
+
+Las **reglas de secuenciamiento** deciden el orden de atención dentro de cada bloque de familia. Se ofrecen cuatro comparables —riesgo de cobertura, EDD, SPT y ratio crítico— porque ninguna es óptima para todos los objetivos: SPT minimiza el tiempo de flujo pero castiga el nivel de servicio, EDD minimiza tardanzas, y el ratio crítico pondera urgencia contra carga pendiente.
 
 En los tres casos, la recomendación queda sujeta a una instancia de revisión: en el plan de producción y el balanceo, el usuario compara ambas alternativas antes de adoptar una; en el abastecimiento, cada recomendación se aprueba, se rechaza o se marca para revisión de forma explícita antes de considerarse una decisión.
 
@@ -151,7 +164,7 @@ optiflow-industrial/
 │   ├── src/
 │   │   ├── app/                Rutas: dashboard, plan, inventario, torre, balanceo, simulador, metodología
 │   │   ├── components/         Componentes de UI, gráficos y tablas por módulo
-│   │   ├── lib/                Datos del caso, tipos y lógica de negocio (planning / balance / supply)
+│   │   ├── lib/                Datos del caso, tipos, estadística y lógica de negocio (planning / balance / supply)
 │   │   └── state/               Hooks de estado por escenario y decisiones
 │   ├── scripts/
 │   │   └── verify.ts           Verificación de reproducibilidad y coherencia del caso
@@ -197,6 +210,8 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 | Proveedor retrasado | Torre de abastecimiento | Sube el lead time efectivo; varios materiales pasan de "comprar" a "anticipar o reprogramar orden" |
 | Riesgo de quiebre | Torre de abastecimiento | Combinación de mayor demanda, más scrap y proveedores menos confiables: la mayoría de los materiales queda en riesgo crítico o alto |
 | Horizonte corto de abastecimiento (7 días) | Torre de abastecimiento | Con menos días de consumo proyectado, aparecen recomendaciones de "monitorear" y "no comprar" que no se ven en horizontes largos |
+| Política de servicio exigente vs. ajustada | Torre de abastecimiento | El capital inmovilizado en stock de seguridad pasa de $217 M a $428 M: es el precio de subir el nivel de servicio |
+| Cambio de regla de secuenciamiento | Simulador (con capacidad −25% y demanda +20%) | Con capacidad holgada las cuatro reglas convergen; bajo restricción, SPT degrada el servicio de 99,4% a 94,6% |
 
 ---
 
@@ -208,6 +223,9 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 - La aplicación **no emite órdenes de compra reales** ni se comunica con proveedores reales.
 - Las decisiones de aprobación de la Torre de abastecimiento se guardan **únicamente en el `localStorage` del navegador**, a modo de demostración del flujo de revisión humana.
 - La versión actual **no lee documentos reales** (remitos, facturas, cotizaciones) ni **utiliza un modelo de lenguaje en producción**: todo el texto explicativo se genera con plantillas a partir de los cálculos.
+- El componente de **calidad del OEE es un parámetro del caso**, no un resultado del plan: el planificador no modela scrap. La disponibilidad y el desempeño sí se derivan del plan calculado.
+- El módulo de balanceo **no simula el WIP real** de la línea: las curvas de Factory Physics son cotas teóricas del sistema, útiles para ubicar el punto de operación.
+- El desvío del lead time se **deriva de supuestos explícitos** (lead time máximo interpretado como percentil 95, escalado por la confiabilidad), no de un historial de entregas.
 - Las heurísticas de planificación y balanceo son constructivas y explicables; **no garantizan un óptimo matemático global**.
 
 ---
@@ -220,6 +238,11 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 - Simulador de escenarios de demanda, capacidad y costos
 - Balanceo de línea con cálculo de takt time y peso posicional (RPW)
 - Torre de abastecimiento con clasificación de riesgo y motor de recomendaciones
+- Análisis ABC y políticas de reposición diferenciadas por clase
+- Stock de seguridad estadístico con nivel de servicio configurable
+- OEE por línea y de planta
+- Ley de Little y cotas de Factory Physics en el balanceo
+- Reglas de secuenciamiento comparables (riesgo, EDD, SPT, ratio crítico)
 - Aprobación humana local de recomendaciones de compra
 - Modelo económico y métricas de cada módulo
 
@@ -232,5 +255,7 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 - Evaluación de recomendaciones contra lo efectivamente ocurrido
 - Trazabilidad avanzada de decisiones
 - Conexión con una fuente de datos real
+- Modelado de scrap dentro del plan de producción, para que la calidad del OEE deje de ser un supuesto
+- Pronóstico con medición de error (MAPE / MAD) y stock de seguridad derivado del error de pronóstico
 
 ---

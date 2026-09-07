@@ -3,6 +3,8 @@
  * Todos los datos son SIMULADOS y se generan de forma determinista (ver src/lib/data).
  */
 
+import type { DispatchRule } from "./planning/dispatch";
+
 export type FamilyId = "LIQ" | "CRE" | "ENV";
 
 export interface ProductFamily {
@@ -64,6 +66,13 @@ export interface ProductionLine {
   familiesAllowed: FamilyId[];
   /** Familia montada en la linea al cierre del periodo anterior. */
   initialFamilyId: FamilyId;
+  /**
+   * Rendimiento de primera pasada: fraccion de unidades que sale conforme sin
+   * retrabajo. Es un parametro de planta usado UNICAMENTE para el indicador
+   * OEE; el plan de produccion no modela scrap, por lo que no afecta ni las
+   * unidades programadas ni los costos.
+   */
+  firstPassYield: number;
 }
 
 export interface LineProductRate {
@@ -165,6 +174,12 @@ export interface Scenario {
   stockoutCostMultiplier: number;
   /** Habilita el uso de horas extra en ambos planes. */
   allowOvertime: boolean;
+  /**
+   * Regla de secuenciamiento del plan recomendado dentro de cada bloque de
+   * familia. El valor por defecto ("riesgo") es el criterio historico del
+   * planificador; las demas se ofrecen como alternativas comparables.
+   */
+  dispatchRule: DispatchRule;
 }
 
 export interface ScenarioPreset {
@@ -289,6 +304,48 @@ export interface PlanEvaluation {
   days: DayResult[];
 }
 
+/* ------------------------------------------------------------------ */
+/* OEE - Overall Equipment Effectiveness                               */
+/* ------------------------------------------------------------------ */
+
+export interface LineOee {
+  lineId: string;
+  lineName: string;
+  /** Jornada teorica de la linea en el horizonte (minutos). */
+  plannedCalendarMinutes: number;
+  /** Minutos realmente habilitados tras eventos de disponibilidad y escenario. */
+  availableMinutes: number;
+  /** Minutos habilitados menos cambios de formato. */
+  operatingMinutes: number;
+  /** Minutos efectivamente produciendo. */
+  runMinutes: number;
+  setupMinutes: number;
+  availability: number;
+  performance: number;
+  quality: number;
+  oee: number;
+  /** Puntos de OEE perdidos por cada componente, sobre 100. */
+  availabilityLossPoints: number;
+  performanceLossPoints: number;
+  qualityLossPoints: number;
+}
+
+export interface OeeResult {
+  lines: LineOee[];
+  /** OEE de la planta, ponderado por el tiempo calendario de cada linea. */
+  plant: {
+    availability: number;
+    performance: number;
+    quality: number;
+    oee: number;
+    plannedCalendarMinutes: number;
+    operatingMinutes: number;
+    runMinutes: number;
+  };
+  /** Cuello de botella del OEE: la linea con el indicador mas bajo. */
+  worstLineId: string;
+}
+
 export type AlertSeverity = "alta" | "media" | "baja";
 
 export interface OperationalAlert {
@@ -341,6 +398,8 @@ export interface PlanningResult {
   alerts: OperationalAlert[];
   decisions: string[];
   materials: MaterialCoverage[];
+  /** Capacidad efectiva del plan recomendado medida como OEE. */
+  oee: OeeResult;
   computedInMs: number;
 }
 
@@ -557,6 +616,11 @@ export interface SupplyMaterial {
   supplierId: string;
 }
 
+/** Materia prima con su clasificacion ABC y su variabilidad ya calculadas. */
+export interface ClassifiedMaterial extends SupplyMaterial {
+  abc: MaterialAbcProfile;
+}
+
 /** Proveedor con las condiciones comerciales del caso simulado. */
 export interface SupplySupplier {
   id: string;
@@ -596,6 +660,33 @@ export interface PurchaseOrder {
 }
 
 /* ------------------------------------------------------------------ */
+/* Clasificacion ABC y politicas de reposicion                         */
+/* ------------------------------------------------------------------ */
+
+export type AbcClass = "A" | "B" | "C";
+
+/** Politica de reposicion: revision continua (Q, r) o periodica (S, R). */
+export type ReviewPolicy = "continua" | "periodica";
+
+/** Resultado del analisis ABC y de la estimacion de variabilidad del consumo. */
+export interface MaterialAbcProfile {
+  materialId: string;
+  abcClass: AbcClass;
+  /** Posicion en el ranking de consumo valorizado (1 = el que mas pesa). */
+  rank: number;
+  /** Consumo valorizado por dia habil (ARS). */
+  dailyValue: number;
+  /** Participacion del material en el consumo valorizado total (0-1). */
+  valueShare: number;
+  /** Participacion acumulada en el orden del Pareto (0-1). */
+  cumulativeShare: number;
+  /** Desvio estandar del consumo diario, estimado del historial de demanda. */
+  dailySigma: number;
+  /** Coeficiente de variacion del consumo diario (sigma / media). */
+  consumptionCv: number;
+}
+
+/* ------------------------------------------------------------------ */
 /* Escenario del modulo                                                */
 /* ------------------------------------------------------------------ */
 
@@ -610,6 +701,8 @@ export interface SupplyScenario {
   scrapPct: number;
   /** Horizonte de analisis en dias habiles (7, 14 o 30). */
   horizonDays: number;
+  /** Politica de nivel de servicio por clase ABC (ver SERVICE_LEVEL_POLICIES). */
+  serviceLevelPolicyId: string;
 }
 
 export interface SupplyScenarioPreset {
@@ -674,6 +767,36 @@ export interface MaterialSupplyRow {
   projectedStock: number;
   /** stock disponible / consumo diario proyectado (dias habiles). */
   coverageDays: number;
+  /** Clasificacion ABC y variabilidad del consumo de este material. */
+  abc: MaterialAbcProfile;
+  /** Politica de reposicion que le corresponde a su clase ABC. */
+  reviewPolicy: ReviewPolicy;
+  /** Periodo de revision S, en dias habiles (1 en la politica continua). */
+  reviewPeriodDays: number;
+  /** Nivel de servicio exigido a este material (0-1). */
+  serviceLevel: number;
+  /** Factor de seguridad Z asociado al nivel de servicio. */
+  serviceLevelZ: number;
+  /** Desvio del consumo diario (unidades/dia habil). */
+  dailySigma: number;
+  /** Desvio del plazo de entrega del proveedor, en dias habiles. */
+  leadTimeSigmaDays: number;
+  /** Desvio de la demanda durante el plazo de reposicion de la politica. */
+  sigmaOverLeadTime: number;
+  /** Parte del desvio explicada por la variabilidad del consumo (0-1). */
+  sigmaDemandShare: number;
+  /** Parte del desvio explicada por la variabilidad del plazo de entrega (0-1). */
+  sigmaLeadTimeShare: number;
+  /** Existencia + ordenado en firme - comprometido. */
+  inventoryPosition: number;
+  /** Unidades comprometidas por reservas (0 en el caso: no hay reservas). */
+  committedUnits: number;
+  /** Punto de pedido r, solo en la politica continua. */
+  reorderPointContinuous: number;
+  /** Techo de stock R, solo en la politica periodica. */
+  stockCeiling: number;
+  /** Lote Q de la politica continua. */
+  orderQuantity: number;
   /** Stock de seguridad expresado en unidades del material. */
   safetyStockUnits: number;
   /** Lead time promedio con el retraso del escenario aplicado. */
@@ -749,6 +872,17 @@ export interface SupplyRecommendation {
   consolidateWith: string[];
 }
 
+/** Un punto de la curva nivel de servicio vs capital inmovilizado. */
+export interface ServiceLevelTradeoffPoint {
+  label: string;
+  probability: number;
+  z: number;
+  /** Valorizacion del stock de seguridad total exigido por ese nivel. */
+  safetyStockValue: number;
+  /** true si es el nivel que la politica activa aplica a la clase A. */
+  isActiveForClassA: boolean;
+}
+
 export interface SupplyKpis {
   criticalMaterials: number;
   highRiskMaterials: number;
@@ -759,6 +893,8 @@ export interface SupplyKpis {
   delayedOrders: number;
   /** Recomendaciones que piden una decision humana (accion distinta de no comprar). */
   actionableRecommendations: number;
+  /** Valorizacion del stock de seguridad exigido por la politica activa. */
+  safetyStockValue: number;
   materialsBelowReorderPoint: number;
   totalPurchaseCost: number;
 }
@@ -773,6 +909,8 @@ export interface SupplyResult {
   orders: OpenOrderRow[];
   recommendations: SupplyRecommendation[];
   kpis: SupplyKpis;
+  /** Curva de nivel de servicio contra capital inmovilizado en stock de seguridad. */
+  serviceLevelTradeoff: ServiceLevelTradeoffPoint[];
   /** Lectura operativa determinista del escenario. */
   insights: string[];
   computedInMs: number;

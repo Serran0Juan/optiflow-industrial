@@ -8,20 +8,38 @@
  *   Consumo proyectado = demanda diaria x BOM x dias del horizonte x (1 + scrap)
  *   Stock proyectado   = stock disponible + ordenes firmes del horizonte - consumo
  *   Cobertura (dias)   = stock disponible / consumo diario proyectado
- *   Punto de pedido    = (consumo diario x lead time promedio) + stock de seguridad
- *   Cantidad sugerida  = consumo durante (lead time + revision) + stock de seguridad
- *                        - stock disponible - ordenes firmes, ajustada al minimo
- *                        de compra del proveedor
+ *   Posicion inventario = existencia + ordenado en firme - comprometido
+ *
+ * El dimensionamiento del stock de seguridad es estadistico, no por dias de
+ * cobertura: cada material recibe el nivel de servicio que le corresponde a su
+ * clase ABC, y de ahi sale el factor Z que multiplica al desvio de la demanda
+ * durante el plazo de reposicion.
+ *
+ *   sigma_plazo   = raiz( plazo x sigma_diario^2 + media_diaria^2 x sigma_LT^2 )
+ *   stock_segurid = Z x sigma_plazo
+ *
+ * Segun la politica que le toca a la clase ABC del material:
+ *
+ *   Revision continua (Q, r)   -> r = media_diaria x LT + Z x sigma_LT
+ *                                 Q = media_diaria x T  + Z x sigma_T
+ *                                 se pide Q cuando la posicion de inventario <= r
+ *
+ *   Revision periodica (S, R)  -> R = media_diaria x (S + LT) + Z x sigma_(S+LT)
+ *                                 se pide R - posicion de inventario cada S dias
+ *
+ * En ambos casos la cantidad final se redondea hacia arriba al minimo de compra
+ * del proveedor.
  */
-import { materialImpactProfiles, supplyDayAt } from "@/lib/data/supply-catalog";
+import { leadTimeSigma, materialImpactProfiles, supplyDayAt } from "@/lib/data/supply-catalog";
 import {
+  ABC_POLICIES,
   LOW_RELIABILITY_THRESHOLD,
-  SUPPLY_REVIEW_PERIOD_DAYS,
 } from "@/lib/data/supply-config";
+import { demandSigmaOverLeadTime } from "@/lib/stats";
 import type {
+  ClassifiedMaterial,
   MaterialSupplyRow,
   ProjectedStockPoint,
-  SupplyMaterial,
   SupplyRiskLevel,
 } from "@/lib/types";
 import type { SupplyContext } from "./context";
@@ -49,7 +67,7 @@ function roundUpToMultiple(value: number, multiple: number): number {
  * produccion del mismo dia.
  */
 function buildProjection(
-  material: SupplyMaterial,
+  material: ClassifiedMaterial,
   dailyConsumption: number,
   receiptsByDay: Map<number, number>,
   ctx: SupplyContext,
@@ -92,7 +110,7 @@ function classifyRisk(input: {
   effectiveLeadTimeDays: number;
   effectiveMaxLeadTimeDays: number;
   effectiveReliability: number;
-  stockOnHand: number;
+  inventoryPosition: number;
   reorderPoint: number;
   hasDelayedOrder: boolean;
 }): { risk: SupplyRiskLevel; riskRule: string } {
@@ -138,10 +156,11 @@ function classifyRisk(input: {
     };
   }
 
-  if (input.stockOnHand < input.reorderPoint - EPSILON) {
+  if (input.inventoryPosition < input.reorderPoint - EPSILON) {
     return {
       risk: "medio",
-      riskRule: "El stock disponible cayo por debajo del punto de pedido.",
+      riskRule:
+        "La posicion de inventario (existencia mas ordenes en firme) cayo por debajo del punto de pedido.",
     };
   }
 
@@ -159,7 +178,10 @@ function classifyRisk(input: {
 }
 
 /** Calcula la fila completa de un material para el escenario activo. */
-export function buildMaterialRow(material: SupplyMaterial, ctx: SupplyContext): MaterialSupplyRow {
+export function buildMaterialRow(
+  material: ClassifiedMaterial,
+  ctx: SupplyContext,
+): MaterialSupplyRow {
   const supplier = ctx.supplierOf(material);
   const dailyConsumption = ctx.dailyConsumption[material.id];
   const projectedConsumption = dailyConsumption * ctx.horizonDays;
@@ -191,8 +213,75 @@ export function buildMaterialRow(material: SupplyMaterial, ctx: SupplyContext): 
     dailyConsumption > EPSILON
       ? material.stockOnHand / dailyConsumption
       : NO_CONSUMPTION_COVERAGE;
-  const safetyStockUnits = material.safetyStockDays * dailyConsumption;
-  const reorderPoint = dailyConsumption * effectiveLeadTimeDays + safetyStockUnits;
+
+  /* ---------------------------------------------------------------- */
+  /* Politica de reposicion segun la clase ABC del material            */
+  /* ---------------------------------------------------------------- */
+
+  const policy = ABC_POLICIES[material.abc.abcClass];
+  const level = ctx.serviceLevelOf(material.abc.abcClass);
+  const z = level.z;
+
+  /* El desvio del consumo se escala con el escenario igual que la media: si la
+     demanda sube 30%, la dispersion absoluta sube en la misma proporcion. */
+  const dailySigma = material.abc.dailySigma * ctx.consumptionFactor;
+  const leadTimeSigmaDays = leadTimeSigma(supplier);
+
+  /* Plazo que el stock de seguridad tiene que proteger. En la politica continua
+     es el lead time; en la periodica es el lead time mas el periodo de revision,
+     porque entre dos revisiones nadie mira el material. */
+  const protectionDays =
+    policy.policy === "continua"
+      ? effectiveLeadTimeDays
+      : effectiveLeadTimeDays + policy.reviewPeriodDays;
+
+  const sigmaOverLeadTime = demandSigmaOverLeadTime(
+    protectionDays,
+    dailyConsumption,
+    dailySigma,
+    leadTimeSigmaDays,
+  );
+  const safetyStockUnits = z * sigmaOverLeadTime;
+
+  /* De donde viene el stock de seguridad: de que el consumo varie o de que el
+     proveedor no cumpla el plazo. La distincion cambia la accion: contra lo
+     primero se compra mas stock, contra lo segundo se negocia con el proveedor
+     o se busca una alternativa. */
+  const demandVarianceTerm = Math.max(0, protectionDays) * dailySigma ** 2;
+  const leadTimeVarianceTerm = dailyConsumption ** 2 * leadTimeSigmaDays ** 2;
+  const totalVariance = demandVarianceTerm + leadTimeVarianceTerm;
+  const sigmaDemandShare = totalVariance > 0 ? demandVarianceTerm / totalVariance : 0;
+  const sigmaLeadTimeShare = totalVariance > 0 ? leadTimeVarianceTerm / totalVariance : 0;
+
+  /* Punto de pedido r: cubre el consumo durante el lead time mas el colchon. */
+  const reorderPointContinuous = dailyConsumption * effectiveLeadTimeDays + safetyStockUnits;
+
+  /* Techo de stock R: cubre el consumo durante la revision mas el lead time. */
+  const stockCeiling =
+    dailyConsumption * (policy.reviewPeriodDays + effectiveLeadTimeDays) + safetyStockUnits;
+
+  /* Lote Q de la politica continua: cubre el periodo objetivo de la clase mas
+     la variabilidad de ese mismo periodo. */
+  const sigmaOverOrderPeriod = demandSigmaOverLeadTime(
+    policy.orderCoverDays,
+    dailyConsumption,
+    dailySigma,
+    0,
+  );
+  const orderQuantity = dailyConsumption * policy.orderCoverDays + z * sigmaOverOrderPeriod;
+
+  /* El punto de pedido que se informa es el que dispara la politica vigente. */
+  const reorderPoint = policy.policy === "continua" ? reorderPointContinuous : stockCeiling;
+
+  /* Posicion de inventario = existencia + ordenado en firme - comprometido.
+     No es lo mismo que la existencia fisica: es lo que dispara la reposicion.
+     En este caso no hay reservas de material por orden de trabajo, por lo que
+     el termino comprometido vale cero y se deja explicito. */
+  const committedUnits = 0;
+  const onOrderUnits = orders
+    .filter((row) => row.order.status === "confirmada" || row.order.status === "en-transito")
+    .reduce((acc, row) => acc + row.order.quantity, 0);
+  const inventoryPosition = material.stockOnHand + onOrderUnits - committedUnits;
 
   const projection = buildProjection(material, dailyConsumption, receiptsByDay, ctx);
   const stockoutPoint = projection.find((point) => point.stock < 0);
@@ -214,22 +303,31 @@ export function buildMaterialRow(material: SupplyMaterial, ctx: SupplyContext): 
     effectiveLeadTimeDays,
     effectiveMaxLeadTimeDays,
     effectiveReliability,
-    stockOnHand: material.stockOnHand,
+    inventoryPosition,
     reorderPoint,
     hasDelayedOrder,
   });
 
-  /* Cantidad sugerida: cubre el consumo durante el lead time mas el ciclo de
-     revision de compras y repone el stock de seguridad, descontando lo que ya
-     hay en planta y lo que llega en firme. Nunca queda por debajo del faltante
-     proyectado ni de la cantidad minima del proveedor. */
+  /* Cantidad sugerida segun la politica de la clase ABC.
+       - Continua (Q, r):  si la posicion de inventario cayo al punto de pedido,
+                           se pide el lote Q.
+       - Periodica (S, R): se pide lo que falta para llegar al techo R.
+     En ningun caso se sugiere menos que el faltante ya proyectado, y siempre se
+     redondea hacia arriba al minimo de compra del proveedor. */
   const shortfallUnits = Math.max(0, -projectedStock);
-  const netRequirement =
-    dailyConsumption * (effectiveLeadTimeDays + SUPPLY_REVIEW_PERIOD_DAYS) +
-    safetyStockUnits -
-    material.stockOnHand -
-    incomingFirmUnits;
-  const rawRequirement = Math.max(netRequirement, shortfallUnits);
+
+  const triggered =
+    policy.policy === "continua"
+      ? inventoryPosition <= reorderPointContinuous + EPSILON
+      : inventoryPosition < stockCeiling - EPSILON;
+
+  const policyRequirement = triggered
+    ? policy.policy === "continua"
+      ? orderQuantity
+      : stockCeiling - inventoryPosition
+    : 0;
+
+  const rawRequirement = Math.max(policyRequirement, shortfallUnits);
   const suggestedQuantity =
     rawRequirement > EPSILON ? roundUpToMultiple(rawRequirement, supplier.minOrderQuantity) : 0;
 
@@ -246,6 +344,21 @@ export function buildMaterialRow(material: SupplyMaterial, ctx: SupplyContext): 
     incomingAtRiskUnits: round(incomingAtRiskUnits, 2),
     projectedStock: round(projectedStock, 2),
     coverageDays: coverageDays === NO_CONSUMPTION_COVERAGE ? coverageDays : round(coverageDays, 2),
+    abc: material.abc,
+    reviewPolicy: policy.policy,
+    reviewPeriodDays: policy.reviewPeriodDays,
+    serviceLevel: level.probability,
+    serviceLevelZ: z,
+    dailySigma: round(dailySigma, 3),
+    leadTimeSigmaDays: round(leadTimeSigmaDays, 2),
+    sigmaOverLeadTime: round(sigmaOverLeadTime, 2),
+    sigmaDemandShare: round(sigmaDemandShare, 4),
+    sigmaLeadTimeShare: round(sigmaLeadTimeShare, 4),
+    inventoryPosition: round(inventoryPosition, 2),
+    committedUnits,
+    reorderPointContinuous: round(reorderPointContinuous, 2),
+    stockCeiling: round(stockCeiling, 2),
+    orderQuantity: round(orderQuantity, 2),
     safetyStockUnits: round(safetyStockUnits, 2),
     effectiveLeadTimeDays,
     effectiveMaxLeadTimeDays,

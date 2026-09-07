@@ -7,8 +7,8 @@
  * textos se arman con los numeros calculados, por lo que cambian cuando cambia
  * el escenario.
  */
-import { MATERIAL_CATEGORY_LABELS, SUPPLY_REVIEW_PERIOD_DAYS } from "@/lib/data/supply-config";
-import { formatCurrency, formatNumber } from "@/lib/format";
+import { ABC_POLICIES, MATERIAL_CATEGORY_LABELS } from "@/lib/data/supply-config";
+import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import type {
   MaterialSupplyRow,
   SupplyAction,
@@ -53,6 +53,30 @@ function coverageText(row: MaterialSupplyRow): string {
 
 function quantityText(row: MaterialSupplyRow): string {
   return `${formatNumber(row.suggestedQuantity)} ${row.material.unit}`;
+}
+
+/** Describe la politica de reposicion que le toca al material por su clase ABC. */
+function policyText(row: MaterialSupplyRow): string {
+  return row.reviewPolicy === "continua"
+    ? `clase ${row.abc.abcClass} con revision continua (Q, r): punto de pedido ${formatNumber(row.reorderPointContinuous)} ${row.material.unit} y lote de ${formatNumber(row.orderQuantity)} ${row.material.unit}`
+    : `clase ${row.abc.abcClass} con revision periodica (S, R) cada ${row.reviewPeriodDays} dias habiles: techo de stock ${formatNumber(row.stockCeiling)} ${row.material.unit}`;
+}
+
+/**
+ * De donde viene el stock de seguridad. Es la frase mas accionable del modulo:
+ * si el desvio lo domina el plazo de entrega, comprar mas stock es tratar el
+ * sintoma; lo que corresponde es trabajar sobre el proveedor.
+ */
+function safetyStockDriverText(row: MaterialSupplyRow): string {
+  const ss = `${formatNumber(row.safetyStockUnits)} ${row.material.unit}`;
+  const level = `${formatPercent(row.serviceLevel, 2)} de nivel de servicio (Z = ${formatNumber(row.serviceLevelZ, 2)})`;
+  if (row.sigmaLeadTimeShare > 0.6) {
+    return `Su stock de seguridad es de ${ss} para sostener ${level}, y el ${formatPercent(row.sigmaLeadTimeShare, 0)} de esa proteccion existe por la variabilidad del plazo de ${row.supplier.name}, no por la del consumo: negociar la confiabilidad del proveedor libera mas capital que ajustar el pronostico.`;
+  }
+  if (row.sigmaDemandShare > 0.6) {
+    return `Su stock de seguridad es de ${ss} para sostener ${level}, y esta explicado sobre todo por la variabilidad del consumo (coeficiente de variacion ${formatNumber(row.abc.consumptionCv, 3)}): se reduce mejorando el pronostico que presionando al proveedor.`;
+  }
+  return `Su stock de seguridad es de ${ss} para sostener ${level}, con la variabilidad del consumo y la del plazo de entrega pesando de forma pareja.`;
 }
 
 /**
@@ -143,20 +167,20 @@ function buildReason(row: MaterialSupplyRow, action: SupplyAction, consolidateWi
 
   switch (action) {
     case "comprar-urgente":
-      return `${material} tiene ${coverageText(row)} y ${supplier} necesita ${lead} dias habiles para reponer. ${row.riskRule} Se recomienda emitir una compra urgente de ${quantityText(row)} para evitar una restriccion de produccion dentro del horizonte simulado.`;
+      return `${material} tiene ${coverageText(row)} y ${supplier} necesita ${lead} dias habiles para reponer. ${row.riskRule} Se recomienda emitir una compra urgente de ${quantityText(row)} para evitar una restriccion de produccion dentro del horizonte simulado. ${safetyStockDriverText(row)}`;
     case "anticipar-orden":
       return `${material} tiene ${coverageText(row)} frente a un lead time de ${lead} dias habiles y ya existe una orden abierta con ${supplier} que no cubre esa fecha. ${row.riskRule} Conviene renegociar la fecha de esa orden antes de emitir una compra nueva de ${quantityText(row)}.`;
     case "compra-normal":
-      return `${material} cae por debajo de su punto de pedido (${formatNumber(row.reorderPoint)} ${row.material.unit} contra un stock de ${formatNumber(row.stockOnHand)} ${row.material.unit}). ${row.riskRule} Emitir una compra de ${quantityText(row)} a ${supplier} dentro del ciclo normal de ${SUPPLY_REVIEW_PERIOD_DAYS} dias de revision.`;
+      return `${material} es ${policyText(row)}. Su posicion de inventario (${formatNumber(row.inventoryPosition)} ${row.material.unit}) disparo la reposicion. ${row.riskRule} Emitir una compra de ${quantityText(row)} a ${supplier}. ${safetyStockDriverText(row)}`;
     case "consolidar-compra":
       return `${material} necesita reponerse (${quantityText(row)}) sin urgencia: ${row.riskRule.toLowerCase()} Como ${supplier} tambien abastece ${consolidateWith.join(", ")}, conviene consolidar el pedido en una sola orden y aprovechar la condicion de compra "${row.supplier.paymentTerms}".`;
     case "monitorear":
-      return `${material} todavia no requiere compra: el stock de ${formatNumber(row.stockOnHand)} ${row.material.unit} supera el punto de pedido de ${formatNumber(row.reorderPoint)} ${row.material.unit}. ${row.riskRule} Se mantiene en seguimiento porque el margen es acotado.`;
+      return `${material} todavia no requiere compra: su posicion de inventario (${formatNumber(row.inventoryPosition)} ${row.material.unit}) supera el disparador de ${formatNumber(row.reorderPoint)} ${row.material.unit} de su politica de ${policyText(row)}. ${row.riskRule} Se mantiene en seguimiento porque el margen es acotado.`;
     case "no-comprar":
     default:
       return row.dailyConsumption <= 0
         ? `${material} no registra consumo en el horizonte de ${row.projection.length} dias habiles, por lo que no corresponde comprar.`
-        : `${material} tiene ${coverageText(row)} y stock por encima del punto de pedido (${formatNumber(row.reorderPoint)} ${row.material.unit}). ${row.riskRule} No corresponde emitir compra en este ciclo.`;
+        : `${material} tiene ${coverageText(row)} y su posicion de inventario supera el disparador de su politica (${policyText(row)}). ${row.riskRule} No corresponde emitir compra en este ciclo.`;
   }
 }
 
@@ -282,6 +306,34 @@ export function buildSupplyInsights(
     inaction > 0
       ? `Comprar lo recomendado cuesta ${formatCurrency(purchase)}; no actuar deja ${formatCurrency(inaction)} de margen de contribucion expuesto por faltantes de material.`
       : `Comprar lo recomendado cuesta ${formatCurrency(purchase)} y no hay margen expuesto: en este escenario ninguna materia prima proyecta faltante.`,
+  );
+
+  const byClass = { A: 0, B: 0, C: 0 };
+  const valueByClass = { A: 0, B: 0, C: 0 };
+  for (const row of rows) {
+    byClass[row.abc.abcClass] += 1;
+    valueByClass[row.abc.abcClass] += row.abc.valueShare;
+  }
+  insights.push(
+    `El analisis ABC deja ${byClass.A} materiales en clase A concentrando el ${formatPercent(valueByClass.A, 1)} del consumo valorizado, contra ${byClass.C} materiales de clase C que apenas explican el ${formatPercent(valueByClass.C, 1)}: los primeros se siguen con revision continua (Q, r) y los ultimos con revision periodica (S, R) cada ${ABC_POLICIES.C.reviewPeriodDays} dias habiles.`,
+  );
+
+  const leadTimeDriven = rows.filter(
+    (row) => row.dailyConsumption > 0 && row.sigmaLeadTimeShare > 0.6,
+  );
+  if (leadTimeDriven.length > 0) {
+    const worst = [...leadTimeDriven].sort((a, b) => b.safetyStockUnits * b.material.unitCost - a.safetyStockUnits * a.material.unitCost)[0];
+    insights.push(
+      `En ${leadTimeDriven.length} material(es) el stock de seguridad esta dominado por la variabilidad del plazo de entrega y no por la del consumo; el caso mas caro es ${worst.material.code} de ${worst.supplier.name} (${formatCurrency(worst.safetyStockUnits * worst.material.unitCost)} inmovilizados). Ahi la palanca es la confiabilidad del proveedor, no el pronostico.`,
+    );
+  }
+
+  const safetyStockValue = rows.reduce(
+    (acc, row) => acc + row.safetyStockUnits * row.material.unitCost,
+    0,
+  );
+  insights.push(
+    `Sostener los niveles de servicio de la politica activa exige ${formatCurrency(safetyStockValue)} inmovilizados en stock de seguridad. Bajar un escalon de nivel de servicio libera capital y sube la probabilidad de quiebre: es el trade-off que la politica hace explicito.`,
   );
 
   const consolidations = recommendations.filter((item) => item.action === "consolidar-compra");

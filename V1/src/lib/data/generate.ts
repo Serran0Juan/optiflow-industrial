@@ -61,6 +61,7 @@ export function generateDataset(seed: number): Dataset {
     setupCostPerHour: definition.setupCostPerHour,
     familiesAllowed: definition.familiesAllowed,
     initialFamilyId: definition.initialFamilyId,
+    firstPassYield: definition.firstPassYield,
   }));
 
   /* ---------------------------------------------------------------- */

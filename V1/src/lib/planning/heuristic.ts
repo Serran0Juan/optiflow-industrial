@@ -1,6 +1,7 @@
 import { formatCurrency, formatNumber } from "@/lib/format";
 import type { FamilyId, PlanRun, Product, ProductionPlan } from "@/lib/types";
 import type { PlanningContext } from "./context";
+import { dispatchComparator, type DispatchInputs } from "./dispatch";
 import { assemblePlan, ceilToLot, cumulativeDemand, floorToLot, pushOrMergeRun } from "./plan-utils";
 
 /** Minutos ociosos minimos para que valga la pena extender una corrida. */
@@ -132,6 +133,34 @@ export function buildRecommendedPlan(ctx: PlanningContext): ProductionPlan {
     };
     const shortageToday = (product: Product): number =>
       Math.max(0, demandToday(product) - stock[product.id]);
+
+    /**
+     * Momento del horizonte en que el producto quiebra, segun el perfil diario
+     * de demanda acumulada. Es la fecha de vencimiento que usa la regla EDD.
+     *
+     * A diferencia de la cobertura, no promedia la demanda: la recorre dia por
+     * dia. El resultado es fraccionario porque el quiebre se interpola dentro
+     * del dia en que ocurre; sin esa interpolacion casi todos los productos
+     * empatarian en el mismo dia entero y la regla se volveria indistinguible
+     * del orden por cobertura.
+     *
+     * Si no quiebra dentro del horizonte devuelve la longitud del horizonte,
+     * de modo que quede al final del orden.
+     */
+    const daysToStockout = (product: Product): number => {
+      const available = stock[product.id];
+      let accumulated = 0;
+      for (let day = dayIndex; day < ctx.days.length; day += 1) {
+        const demand = ctx.demand[product.id][day];
+        if (accumulated + demand > available) {
+          const remaining = available - accumulated;
+          const fraction = demand > 0 ? remaining / demand : 0;
+          return day - dayIndex + fraction;
+        }
+        accumulated += demand;
+      }
+      return ctx.days.length;
+    };
     const requirementToday = (product: Product): number =>
       Math.max(0, demandToday(product) + safetyTarget(product) - stock[product.id]);
 
@@ -175,10 +204,27 @@ export function buildRecommendedPlan(ctx: PlanningContext): ProductionPlan {
         const budget = state.regularRemaining - setupMinutes;
         if (budget <= 0) break;
 
+        /* Los minutos de proceso dependen de la velocidad de esta linea, por
+           eso el comparador se arma aca dentro y no una sola vez por dia. */
+        const dispatchInputs: DispatchInputs = {
+          coverDays,
+          riskTwoDays,
+          daysToStockout,
+          processMinutes: (product) => {
+            const unitsPerMinute = ctx.rate(line.id, product.id);
+            return unitsPerMinute > 0 ? requirementToday(product) / unitsPerMinute : 0;
+          },
+          processDays: (product) => {
+            const unitsPerMinute = ctx.rate(line.id, product.id);
+            if (unitsPerMinute <= 0 || line.regularMinutesPerDay <= 0) return 0;
+            return requirementToday(product) / unitsPerMinute / line.regularMinutesPerDay;
+          },
+        };
+
         const candidates = assigned
           .filter((product) => product.familyId === familyId)
           .filter((product) => requirementToday(product) > product.lotSize * 0.25)
-          .sort((a, b) => coverDays(a) - coverDays(b) || riskTwoDays(b) - riskTwoDays(a) || a.id.localeCompare(b.id));
+          .sort(dispatchComparator(ctx.scenario.dispatchRule, dispatchInputs));
 
         // Se simula el bloque completo antes de comprometer el cambio de formato:
         // pagar un setup para terminar produciendo cero seria un desperdicio puro.

@@ -1,4 +1,5 @@
 import type { Scenario, ScenarioPreset } from "@/lib/types";
+import { DISPATCH_RULES } from "./dispatch";
 import { clamp } from "@/lib/utils";
 
 export const SCENARIO_LIMITS = {
@@ -14,6 +15,7 @@ export const DEFAULT_SCENARIO: Scenario = {
   setupTimeIncreasePct: 0,
   stockoutCostMultiplier: 1,
   allowOvertime: true,
+  dispatchRule: "riesgo",
 };
 
 export const SCENARIO_PRESETS: ScenarioPreset[] = [
@@ -35,6 +37,7 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
       setupTimeIncreasePct: 0,
       stockoutCostMultiplier: 1.5,
       allowOvertime: true,
+      dispatchRule: "riesgo",
     },
   },
   {
@@ -48,6 +51,7 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
       setupTimeIncreasePct: 30,
       stockoutCostMultiplier: 1,
       allowOvertime: false,
+      dispatchRule: "riesgo",
     },
   },
 ];
@@ -75,6 +79,9 @@ export function normalizeScenario(scenario: Scenario): Scenario {
       SCENARIO_LIMITS.stockoutCostMultiplier.max,
     ),
     allowOvertime: scenario.allowOvertime,
+    dispatchRule: DISPATCH_RULES.some((rule) => rule.id === scenario.dispatchRule)
+      ? scenario.dispatchRule
+      : DEFAULT_SCENARIO.dispatchRule,
   };
 }
 
@@ -85,6 +92,7 @@ export function matchPreset(scenario: Scenario): ScenarioPreset | undefined {
       preset.scenario.capacityReductionPct === scenario.capacityReductionPct &&
       preset.scenario.setupTimeIncreasePct === scenario.setupTimeIncreasePct &&
       preset.scenario.stockoutCostMultiplier === scenario.stockoutCostMultiplier &&
-      preset.scenario.allowOvertime === scenario.allowOvertime,
+      preset.scenario.allowOvertime === scenario.allowOvertime &&
+      preset.scenario.dispatchRule === scenario.dispatchRule,
   );
 }

@@ -1,5 +1,6 @@
 import {
   baseDailyConsumptionByMaterial,
+  classifiedMaterials,
   openPurchaseOrders,
   orderOffsets,
   supplyDayAt,
@@ -7,7 +8,11 @@ import {
   supplyMaterials,
   supplySuppliersById,
 } from "@/lib/data/supply-catalog";
+import { serviceLevelPolicy } from "@/lib/data/supply-config";
+import { serviceLevel, type ServiceLevelOption } from "@/lib/stats";
 import type {
+  AbcClass,
+  ClassifiedMaterial,
   OpenOrderRow,
   PlanningDay,
   PurchaseOrder,
@@ -30,7 +35,11 @@ export interface SupplyContext {
   horizonDays: number;
   startDate: string;
   endDate: string;
-  materials: SupplyMaterial[];
+  materials: ClassifiedMaterial[];
+  /** Factor total aplicado al consumo base (demanda del escenario x scrap). */
+  consumptionFactor: number;
+  /** Nivel de servicio exigido a una clase ABC segun la politica del escenario. */
+  serviceLevelOf: (abcClass: AbcClass) => ServiceLevelOption;
   /** Consumo diario por material (unidades/dia habil) con demanda y scrap aplicados. */
   dailyConsumption: Record<string, number>;
   supplierOf: (material: SupplyMaterial) => SupplySupplier;
@@ -56,11 +65,14 @@ export function buildSupplyContext(scenario: SupplyScenario): SupplyContext {
 
   const demandFactor = 1 + scenario.demandVariationPct / 100;
   const scrapFactor = 1 + scenario.scrapPct / 100;
+  const consumptionFactor = demandFactor * scrapFactor;
+
+  const levelPolicy = serviceLevelPolicy(scenario.serviceLevelPolicyId);
 
   const dailyConsumption: Record<string, number> = Object.fromEntries(
     supplyMaterials.map((material) => [
       material.id,
-      baseDailyConsumptionByMaterial[material.id] * demandFactor * scrapFactor,
+      baseDailyConsumptionByMaterial[material.id] * consumptionFactor,
     ]),
   );
 
@@ -114,7 +126,9 @@ export function buildSupplyContext(scenario: SupplyScenario): SupplyContext {
     horizonDays,
     startDate: days[0].date,
     endDate: days[days.length - 1].date,
-    materials: supplyMaterials,
+    materials: classifiedMaterials,
+    consumptionFactor,
+    serviceLevelOf: (abcClass) => serviceLevel(levelPolicy.byClass[abcClass]),
     dailyConsumption,
     supplierOf: (material) => supplySuppliersById[material.supplierId],
     leadTimeOf,

@@ -3,8 +3,10 @@ import { PURCHASE_ORDER_STATUS_LABELS } from "@/lib/data/supply-config";
 import { formatNumber } from "@/lib/format";
 import { NO_CONSUMPTION_COVERAGE } from "@/lib/supply/metrics";
 import type {
+  AbcClass,
   DecisionStatus,
   PurchaseOrderStatus,
+  ReviewPolicy,
   SupplyConfidence,
   SupplyRiskLevel,
 } from "@/lib/types";
@@ -49,6 +51,26 @@ const CONFIDENCE_VARIANT: Record<SupplyConfidence, "positive" | "neutral" | "war
   media: "neutral",
   baja: "warning",
 };
+
+const ABC_VARIANT: Record<AbcClass, "navy" | "neutral" | "outline"> = {
+  A: "navy",
+  B: "neutral",
+  C: "outline",
+};
+
+/** Clase del analisis ABC del material. */
+export function AbcBadge({ abcClass, title }: { abcClass: AbcClass; title?: string }) {
+  return (
+    <Badge variant={ABC_VARIANT[abcClass]} title={title}>
+      Clase {abcClass}
+    </Badge>
+  );
+}
+
+/** Etiqueta corta de la politica de reposicion vigente. */
+export function policyLabel(policy: ReviewPolicy): string {
+  return policy === "continua" ? "Continua (Q, r)" : "Periodica (S, R)";
+}
 
 export function RiskBadge({ risk, title }: { risk: SupplyRiskLevel; title?: string }) {
   return (

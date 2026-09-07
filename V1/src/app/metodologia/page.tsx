@@ -9,6 +9,10 @@ import {
   HISTORY_BUSINESS_DAYS,
   STOCKOUT_PENALTY_RATE,
 } from "@/lib/data/config";
+import { buildFactoryPhysics } from "@/lib/balance/factory-physics";
+import { runPlanning, OEE_BENCHMARKS } from "@/lib/planning";
+import { DISPATCH_RULES } from "@/lib/planning/dispatch";
+import { DEFAULT_SCENARIO } from "@/lib/planning/scenarios";
 import { dataset } from "@/lib/data/dataset";
 import { formatCurrency, formatNumber, formatPercent, formatSeconds } from "@/lib/format";
 import { runBalance } from "@/lib/balance";
@@ -19,6 +23,9 @@ import { runSupply } from "@/lib/supply";
 import { SUPPLY_PRESETS } from "@/lib/supply/scenarios";
 import { supplySuppliers } from "@/lib/data/supply-catalog";
 import {
+  ABC_POLICIES,
+  ABC_THRESHOLDS,
+  CONSUMPTION_SIGMA_WINDOW_DAYS,
   LOW_RELIABILITY_THRESHOLD,
   SUPPLY_REVIEW_PERIOD_DAYS,
 } from "@/lib/data/supply-config";
@@ -31,6 +38,10 @@ const SECTIONS = [
   { id: "economia", label: "Formula economica" },
   { id: "balanceo", label: "Balanceo de linea" },
   { id: "abastecimiento", label: "Torre de abastecimiento" },
+  { id: "variabilidad", label: "Variabilidad, ABC y stock de seguridad" },
+  { id: "oee", label: "OEE y capacidad efectiva" },
+  { id: "factory-physics", label: "Ley de Little" },
+  { id: "despacho", label: "Reglas de secuenciamiento" },
   { id: "lean", label: "Desperdicios Lean" },
   { id: "limitaciones", label: "Limitaciones generales" },
   { id: "roadmap", label: "Roadmap V2.1" },
@@ -68,6 +79,26 @@ export default function MethodologyPage() {
   // Referencia de la Torre de abastecimiento: preset "Operacion estable",
   // calculado con las mismas funciones que usa la pagina del modulo.
   const supplyReference = runSupply(SUPPLY_PRESETS[0].scenario);
+  // Referencias de OEE, Factory Physics y reglas de despacho, calculadas con
+  // las mismas funciones que usan las paginas, sin numeros escritos a mano.
+  const planReference = runPlanning(DEFAULT_SCENARIO);
+  const oeeReference = planReference.oee;
+  const physicsReference = buildFactoryPhysics(balanceRecommended.metrics);
+  const dispatchReference = DISPATCH_RULES.map((rule) => {
+    const run = runPlanning({
+      ...DEFAULT_SCENARIO,
+      dispatchRule: rule.id,
+      capacityReductionPct: 25,
+      demandVariationPct: 20,
+    });
+    return {
+      rule: rule.name,
+      cost: run.comparison.recommended.costs.total,
+      serviceLevel: run.comparison.recommended.serviceLevel,
+      setups: run.comparison.recommended.setupCount,
+      unmet: run.comparison.recommended.unmetUnits,
+    };
+  });
 
   return (
     <div className="space-y-6">
@@ -1141,6 +1172,359 @@ cantidad_sugerida  = redondear_hacia_arriba(
             </li>
           </ul>
         </div>
+      </Section>
+
+      <Section
+        id="variabilidad"
+        title="Variabilidad, ABC y stock de seguridad"
+        description="Por que el colchon de inventario no se fija en dias de cobertura sino con estadistica, y como el analisis ABC decide cuanto servicio se le exige a cada material."
+      >
+        <p>
+          Este es el nucleo cuantitativo del modulo de abastecimiento. La pregunta que responde no es{" "}
+          <em>cuanto stock tengo</em> sino <strong>cuanto stock necesito y por que exactamente ese</strong>.
+        </p>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            De donde sale la variabilidad del consumo
+          </h3>
+          <p>
+            El caso genera {HISTORY_BUSINESS_DAYS} dias habiles de historial de demanda por producto.
+            Ese historial no se usa solo para pronosticar la media: tambien permite medir la
+            dispersion. El consumo de una materia prima se reconstruye dia por dia explotando la
+            lista de materiales, y sobre esa serie se calcula el desvio estandar muestral.
+          </p>
+          <Formula>{`consumo_material(dia d) = SUM_productos( demanda_producto(d) x consumo_por_unidad )
+
+media  = SUM(x_i) / n
+sigma  = raiz( SUM (x_i - media)^2 / (n - 1) )`}</Formula>
+          <p className="mt-2">
+            Se usan los ultimos {CONSUMPTION_SIGMA_WINDOW_DAYS} dias habiles y no los{" "}
+            {HISTORY_BUSINESS_DAYS} completos: el historial del caso tiene tendencia, y una ventana
+            larga la confunde con dispersion, inflando el desvio y con el todo el stock de seguridad.
+          </p>
+          <Note tone="info" title="El efecto pooling aparece solo">
+            El desvio del consumo de un material <strong>no</strong> es la suma de los desvios de los
+            productos que lo consumen. Los picos de un SKU se compensan con los valles de otro, asi
+            que un material compartido por muchos productos tiene menos variabilidad relativa que
+            cada producto por separado. En el caso, los coeficientes de variacion del consumo caen
+            entre 0,079 y 0,106, por debajo de la variabilidad con la que se genero la demanda de
+            cada SKU. Es el mismo efecto que justifica el pooling de inventarios: conviene stockear
+            partes comunes antes que producto terminado.
+          </Note>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Variabilidad del plazo de entrega
+          </h3>
+          <p>
+            El caso no guarda historial de entregas, asi que el desvio del lead time se deriva de dos
+            datos que si tiene, con supuestos explicitos: el lead time maximo simulado se interpreta
+            como el <strong>percentil 95</strong> de la distribucion de plazos, y esa dispersion se
+            escala por la confiabilidad del proveedor.
+          </p>
+          <Formula>{`sigma_LT = ( LT_maximo - LT_promedio ) / 1,645 / confiabilidad`}</Formula>
+          <p className="mt-2">
+            Un proveedor que cumple el 96% de las veces con un rango de 3 dias termina con un desvio
+            de 1,9 dias; uno que cumple el 79% con un rango de 6 dias llega a 4,6 dias. La diferencia
+            se paga integra en stock de seguridad.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">Analisis ABC (Pareto)</h3>
+          <p>
+            No todos los materiales merecen la misma atencion ni el mismo nivel de servicio. Los
+            materiales se ordenan por consumo valorizado (consumo diario por costo unitario) y se
+            segmentan por participacion acumulada: clase A hasta el{" "}
+            {formatPercent(ABC_THRESHOLDS.a, 0)}, clase B hasta el{" "}
+            {formatPercent(ABC_THRESHOLDS.b, 0)}, clase C el resto.
+          </p>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th>Clase</th>
+                <th className="numeric">Materiales</th>
+                <th className="numeric">Consumo valorizado</th>
+                <th>Politica de reposicion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(["A", "B", "C"] as const).map((abcClass) => {
+                const members = supplyReference.rows.filter(
+                  (row) => row.abc.abcClass === abcClass,
+                );
+                const share = members.reduce((acc, row) => acc + row.abc.valueShare, 0);
+                return (
+                  <tr key={abcClass}>
+                    <td className="font-medium text-navy-800">Clase {abcClass}</td>
+                    <td className="numeric">{members.length}</td>
+                    <td className="numeric">{formatPercent(share, 1)}</td>
+                    <td>{ABC_POLICIES[abcClass].description}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </TableWrap>
+          <p className="mt-2">
+            La clasificacion usa el consumo <strong>base</strong> y no el del escenario a proposito:
+            el ABC es una decision de politica que se revisa cada varios meses, no algo que deba
+            cambiar cada vez que alguien mueve un control del simulador.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Stock de seguridad y politicas de reposicion
+          </h3>
+          <p>
+            El colchon no se fija en dias de cobertura: sale del nivel de servicio que la politica le
+            exige a la clase del material. El nivel de servicio define un factor Z de la normal
+            estandar, y ese Z multiplica al desvio de la demanda durante el plazo que hay que
+            proteger.
+          </p>
+          <Formula>{`sigma_plazo    = raiz( plazo x sigma_diario^2  +  media_diaria^2 x sigma_LT^2 )
+stock_seguridad = Z x sigma_plazo
+
+Revision continua (Q, r)    r = media_diaria x LT + Z x sigma_LT
+                            Q = media_diaria x T  + Z x sigma_T
+                            se pide Q cuando la posicion de inventario <= r
+
+Revision periodica (S, R)   R = media_diaria x (S + LT) + Z x sigma_(S+LT)
+                            cada S dias se pide R - posicion de inventario
+
+posicion_de_inventario = existencia + ordenado en firme - comprometido`}</Formula>
+          <p className="mt-2">
+            El segundo termino de <code className="rounded bg-steel-100 px-1 py-0.5 font-mono text-xs">sigma_plazo</code>{" "}
+            es el que suele olvidarse, y es el que subdimensiona el stock cuando el proveedor es poco
+            confiable. La aplicacion informa que porcentaje del colchon corresponde a cada termino,
+            porque la accion que sigue es distinta: contra la variabilidad del consumo se mejora el
+            pronostico, contra la del plazo se negocia con el proveedor o se busca una alternativa.
+          </p>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th>Nivel de servicio</th>
+                <th className="numeric">Z</th>
+                <th className="numeric">Capital inmovilizado en el caso base</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supplyReference.serviceLevelTradeoff.map((point) => (
+                <tr key={point.label}>
+                  <td>{point.label}</td>
+                  <td className="numeric">{formatNumber(point.z, 4)}</td>
+                  <td className="numeric">{formatCurrency(point.safetyStockValue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+          <p className="mt-2">
+            La tabla es el argumento para no exigir 99,87% en todos los materiales: el stock de
+            seguridad crece de forma <strong>lineal</strong> con Z mientras que la probabilidad de no
+            quebrar crece cada vez menos. Pasar de 1 sigma a 3 sigma triplica el capital inmovilizado
+            para ganar 15,7 puntos de probabilidad.
+          </p>
+          <p>
+            <strong>Posicion de inventario</strong> no es lo mismo que existencia fisica: es lo que
+            dispara la reposicion. En este caso no hay reservas de material por orden de trabajo, por
+            lo que el termino comprometido vale cero, y se deja explicito en la formula para que la
+            omision sea visible en lugar de silenciosa.
+          </p>
+        </div>
+      </Section>
+
+      <Section
+        id="oee"
+        title="OEE y capacidad efectiva"
+        description="Como se mide la capacidad que realmente entrega la planta, separando las tres perdidas que suelen esconderse entre si."
+      >
+        <p>
+          La utilizacion sola engana: una linea puede estar 90% utilizada y entregar poco, si buena
+          parte de ese tiempo se va en cambios de formato o produce unidades que despues se rechazan.
+          El OEE separa las tres perdidas y las multiplica.
+        </p>
+        <Formula>{`OEE = Disponibilidad x Desempeno x Calidad
+
+Disponibilidad = tiempo operativo / tiempo calendario planificado
+Desempeno      = minutos de corrida / tiempo operativo
+Calidad        = unidades buenas / unidades producidas`}</Formula>
+        <p>
+          Los tiempos se descuentan en cascada: el <strong>tiempo calendario planificado</strong> es
+          la jornada de la linea menos las paradas planificadas; el <strong>tiempo disponible</strong>{" "}
+          descuenta ademas los eventos de menor disponibilidad y la reduccion de capacidad del
+          escenario; el <strong>tiempo operativo</strong> descuenta los cambios de formato.
+        </p>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th>Linea</th>
+              <th className="numeric">Disponibilidad</th>
+              <th className="numeric">Desempeno</th>
+              <th className="numeric">Calidad</th>
+              <th className="numeric">OEE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {oeeReference.lines.map((lineOee) => (
+              <tr key={lineOee.lineId}>
+                <td className="font-medium text-navy-800">{lineOee.lineId}</td>
+                <td className="numeric">{formatPercent(lineOee.availability, 1)}</td>
+                <td className="numeric">{formatPercent(lineOee.performance, 1)}</td>
+                <td className="numeric">{formatPercent(lineOee.quality, 1)}</td>
+                <td className="numeric font-semibold">{formatPercent(lineOee.oee, 1)}</td>
+              </tr>
+            ))}
+            <tr>
+              <td className="font-medium text-navy-800">Planta</td>
+              <td className="numeric">{formatPercent(oeeReference.plant.availability, 1)}</td>
+              <td className="numeric">{formatPercent(oeeReference.plant.performance, 1)}</td>
+              <td className="numeric">{formatPercent(oeeReference.plant.quality, 1)}</td>
+              <td className="numeric font-semibold">{formatPercent(oeeReference.plant.oee, 1)}</td>
+            </tr>
+          </tbody>
+        </TableWrap>
+        <p>
+          Referencias de interpretacion habituales: {formatPercent(OEE_BENCHMARKS.worldClass, 0)} se
+          considera clase mundial, {formatPercent(OEE_BENCHMARKS.typical, 0)} es tipico y{" "}
+          {formatPercent(OEE_BENCHMARKS.starting, 0)} es comun en plantas que recien empiezan un
+          programa de mejora. No son objetivos comprometidos por ninguna planta real.
+        </p>
+        <Note tone="warning" title="Que parte del OEE es un supuesto">
+          El plan de produccion de este caso <strong>no modela scrap</strong>. El componente de
+          calidad usa el rendimiento de primera pasada declarado por linea en la configuracion de
+          planta: es un parametro del caso, no un resultado del plan. La disponibilidad y el
+          desempeno si salen enteros del plan calculado. Modelar el scrap dentro del plan, con su
+          impacto sobre unidades y costos, queda fuera del alcance actual.
+        </Note>
+      </Section>
+
+      <Section
+        id="factory-physics"
+        title="Ley de Little y cotas de la linea"
+        description="Los dos descriptores que gobiernan cualquier sistema de produccion y las cotas de performance que se derivan de ellos."
+      >
+        <p>
+          Toda linea de produccion se describe con dos numeros, y el modulo de balanceo ya los
+          calcula sin nombrarlos: la <strong>tasa de cuello de botella</strong> rb, que es la inversa
+          del tiempo de ciclo, y el <strong>tiempo neto de proceso</strong> T0, que es el contenido
+          total de trabajo. De ahi sale el <strong>WIP critico</strong>.
+        </p>
+        <Formula>{`rb = 1 / tiempo_de_ciclo
+T0 = contenido total de trabajo
+W0 = rb x T0
+
+Ley de Little:  WIP = TH x TF
+
+Mejor caso          TH = min(w / T0, rb)          TF = max(T0, w / rb)
+Peor caso practico  TH = w / (W0 + w - 1) x rb    TF = T0 + (w - 1) / rb
+Peor caso           TH = 1 / T0                   TF = w x T0`}</Formula>
+        <p>
+          Con el balance recomendado del preset estable: rb ={" "}
+          {formatNumber(physicsReference.bottleneckRatePerHour, 1)} unidades por hora, T0 ={" "}
+          {formatSeconds(physicsReference.rawProcessSeconds)} y W0 ={" "}
+          {formatNumber(physicsReference.criticalWip, 2)} unidades.
+        </p>
+        <p>
+          La Ley de Little se cumple siempre, con o sin variabilidad, y explica dos errores de
+          gestion frecuentes. <strong>Subir el WIP para producir mas no funciona</strong>: por encima
+          de W0 el throughput ya quedo limitado por el cuello de botella, asi que lo unico que crece
+          es el tiempo de flujo. <strong>Bajar el WIP para acortar plazos tampoco es gratis</strong>:
+          por debajo de W0 el cuello de botella se queda sin material y se pierde produccion.
+        </p>
+        <Note tone="warning" title="Que no dice este calculo">
+          El caso de balanceo es deterministico y no modela colas ni buffers entre estaciones. Lo que
+          se grafica son las <strong>cotas teoricas</strong> del sistema, utiles para ubicar el punto
+          de operacion, no una simulacion del WIP real de la linea. El peor caso practico es la
+          referencia honesta contra la cual compararse; el mejor caso solo existe sin variabilidad.
+        </Note>
+      </Section>
+
+      <Section
+        id="despacho"
+        title="Reglas de secuenciamiento"
+        description="Como se decide el orden de atencion dentro de cada bloque de familia, y por que no hay una regla correcta para todos los objetivos."
+      >
+        <p>
+          Una vez elegida la familia que corre en una linea, queda decidir en que orden atender sus
+          productos. Ninguna regla es optima para todo: cada una favorece un objetivo y cede en otro.
+          El simulador permite cambiarla y comparar el resultado.
+        </p>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th>Regla</th>
+              <th>Criterio de orden</th>
+              <th>Favorece</th>
+            </tr>
+          </thead>
+          <tbody>
+            {DISPATCH_RULES.map((rule) => (
+              <tr key={rule.id}>
+                <td className="font-medium text-navy-800">{rule.name}</td>
+                <td>{rule.description}</td>
+                <td>{rule.favors}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+        <Formula>{`ratio_critico = dias_hasta_el_quiebre / dias_de_trabajo_pendientes
+
+  RC > 1  el trabajo llega a tiempo
+  RC < 1  el trabajo va a salir tarde
+  RC < 0  el trabajo ya esta atrasado`}</Formula>
+        <p>
+          La diferencia entre <strong>riesgo de cobertura</strong> y <strong>EDD</strong> no es
+          cosmetica: la primera usa la demanda media diaria, la segunda recorre el perfil real dia
+          por dia e interpola el momento exacto del quiebre dentro del dia en que ocurre. Con demanda
+          estacional ordenan distinto.
+        </p>
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-navy-800">
+            Resultado con capacidad restringida
+          </h3>
+          <p className="mb-2">
+            Con capacidad holgada las cuatro reglas convergen: si sobra tiempo, el orden importa
+            poco. Las diferencias aparecen cuando la capacidad aprieta. Este es el caso con
+            capacidad reducida 25% y demanda 20% mayor:
+          </p>
+          <TableWrap>
+            <thead>
+              <tr>
+                <th>Regla</th>
+                <th className="numeric">Costo total</th>
+                <th className="numeric">Nivel de servicio</th>
+                <th className="numeric">Setups</th>
+                <th className="numeric">Unidades no atendidas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dispatchReference.map((item) => (
+                <tr key={item.rule}>
+                  <td className="font-medium text-navy-800">{item.rule}</td>
+                  <td className="numeric">{formatCurrency(item.cost)}</td>
+                  <td className="numeric">{formatPercent(item.serviceLevel)}</td>
+                  <td className="numeric">{item.setups}</td>
+                  <td className="numeric">{formatNumber(item.unmet)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+          <p className="mt-2">
+            El resultado confirma lo que predice la teoria: SPT minimiza el tiempo de flujo pero
+            castiga el nivel de servicio, porque posterga sistematicamente los trabajos largos, que
+            en esta planta son justamente los productos de mayor volumen. El orden por riesgo de
+            cobertura, que es el criterio por defecto del plan recomendado, es el que mejor sostiene
+            el servicio en este caso.
+          </p>
+        </div>
+        <Note tone="info" title="Solo afecta al plan recomendado">
+          La regla de secuenciamiento cambia unicamente el plan recomendado. El plan base sigue
+          siempre el orden comercial fijo, porque su proposito es representar la practica habitual
+          contra la cual comparar. Ninguna regla garantiza optimalidad: son heuristicas robustas, y
+          la factibilidad importa mas que la optimalidad.
+        </Note>
       </Section>
 
       <Section

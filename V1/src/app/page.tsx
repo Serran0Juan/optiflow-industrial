@@ -1,8 +1,17 @@
 "use client";
 
-import { Activity, Clock4, Coins, Gauge, Repeat, TrendingDown, TrendingUp } from "lucide-react";
+import {
+  Activity,
+  Clock4,
+  Coins,
+  Gauge,
+  Repeat,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
 import { CostBreakdownChart, CostComparisonChart } from "@/components/charts/cost-charts";
-import { InventoryTrendChart } from "@/components/charts/operations-charts";
+import { InventoryTrendChart, OeeByLineChart } from "@/components/charts/operations-charts";
 import { AlertsTable } from "@/components/dashboard/alerts-table";
 import { DecisionSummary } from "@/components/dashboard/decision-summary";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,15 +23,26 @@ import {
   formatNumber,
   formatPercent,
 } from "@/lib/format";
+import { OEE_BENCHMARKS } from "@/lib/planning/oee";
 import { useScenario } from "@/state/scenario-context";
 
 export default function DashboardPage() {
   const { result } = useScenario();
-  const { comparison, alerts, decisions, days } = result;
+  const { comparison, alerts, decisions, days, oee } = result;
   const { base, recommended } = comparison;
 
   const serviceTone: KpiTone =
     recommended.serviceLevel >= 0.99 ? "positive" : recommended.serviceLevel >= 0.95 ? "warning" : "danger";
+
+  /* El OEE se compara contra las referencias habituales de la bibliografia:
+     85% clase mundial, 60% tipico, 40% al comenzar un programa de mejora. */
+  const oeeTone: KpiTone =
+    oee.plant.oee >= OEE_BENCHMARKS.worldClass
+      ? "positive"
+      : oee.plant.oee >= OEE_BENCHMARKS.typical
+        ? "warning"
+        : "danger";
+  const worstLine = oee.lines.find((line) => line.lineId === oee.worstLineId);
 
   return (
     <div className="space-y-6">
@@ -87,6 +107,22 @@ export default function DashboardPage() {
           hint="Minutos de produccion y setup sobre la capacidad de jornada normal disponible."
           comparison={{ label: "Plan base:", value: formatPercent(base.utilization, 0) }}
         />
+        <KpiCard
+          label="OEE de planta"
+          value={formatPercent(oee.plant.oee, 1)}
+          icon={Zap}
+          tone={oeeTone}
+          hint={`Disponibilidad ${formatPercent(oee.plant.availability, 1)} x desempeno ${formatPercent(oee.plant.performance, 1)} x calidad ${formatPercent(oee.plant.quality, 1)}. Referencia de clase mundial: ${formatPercent(OEE_BENCHMARKS.worldClass, 0)}.`}
+          comparison={
+            worstLine
+              ? {
+                  label: `Linea mas baja (${worstLine.lineId}):`,
+                  value: formatPercent(worstLine.oee, 1),
+                  tone: "warning",
+                }
+              : undefined
+          }
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -120,6 +156,22 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>OEE por linea: donde se pierde la capacidad efectiva</CardTitle>
+          <CardDescription>
+            Cada barra suma 100 puntos: el OEE alcanzado mas las tres perdidas que lo separan del
+            maximo teorico. La disponibilidad descuenta paradas y cambios de formato, el desempeno
+            mide el tiempo habilitado sin trabajo programado, y la calidad usa el rendimiento de
+            primera pasada declarado para cada linea. El plan de produccion no modela scrap: el
+            componente de calidad es un parametro del caso, no un resultado del plan.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <OeeByLineChart oee={oee} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

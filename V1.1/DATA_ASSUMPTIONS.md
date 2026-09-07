@@ -9,6 +9,7 @@ Este documento describe **cómo se construyen los datos** de OptiFlow Industrial
 - **Historial de demanda:** 90 días hábiles previos al horizonte (1.620 registros).
 - **Caso de balanceo de línea (V1.1):** datos fijos, no generados con semilla. Ver sección 8.
 - **Caso de torre de abastecimiento (V2):** amplía el caso semanal con 17 materias primas, 6 proveedores y 10 órdenes de compra abiertas; datos fijos, no generados con semilla. Todos sus plazos se expresan en días hábiles. Ver sección 9.
+- **Capa estadística (V3):** desvío del consumo estimado del historial, análisis ABC, stock de seguridad por nivel de servicio, OEE, Ley de Little y reglas de secuenciamiento. Ver sección 10.
 
 ---
 
@@ -592,3 +593,212 @@ Las aprobaciones y el registro de decisiones se guardan **únicamente en el `loc
 8. **Un solo depósito y un solo proveedor por material.** No hay múltiples plantas, proveedores alternativos ni compras repartidas entre varios orígenes.
 9. **El consumo se distribuye de forma uniforme en el horizonte.** La proyección diaria usa el consumo medio, no el programa día a día del plan de producción, que solo cubre 5 días hábiles.
 10. **El scrap es un porcentaje plano.** No depende del material, del producto ni de la etapa del proceso.
+
+---
+
+## 10. Variabilidad, ABC, OEE y Factory Physics (V3)
+
+Esta seccion documenta los supuestos estadisticos que sostienen el stock de seguridad, la clasificacion ABC, el indicador OEE, las cotas de Factory Physics y las reglas de secuenciamiento.
+
+### 10.1 Estimacion de la variabilidad del consumo
+
+El historial de demanda del caso (90 dias habiles) se explota via la lista de materiales para reconstruir la serie de consumo diario de cada materia prima. Sobre esa serie se calcula el desvio estandar **muestral** (denominador n - 1), usando los ultimos **30 dias habiles**.
+
+La ventana es de 30 dias y no de 90 a proposito: el historial del caso tiene tendencia, y una ventana larga la confunde con dispersion, inflando el desvio y con el todo el stock de seguridad.
+
+| Codigo | Material | Consumo diario | Sigma diario | CV | Clase ABC |
+| --- | --- | ---: | ---: | ---: | :---: |
+| `MP-01` | Hipoclorito de sodio 10% | 32.152 | 2.762 | 0,087 | A |
+| `MP-14` | Dosificador gatillo 500 ml | 21.821 | 1.840 | 0,086 | A |
+| `MP-02` | Tensioactivo LESS 70% | 3.786 | 333 | 0,088 | A |
+| `MP-10` | Preforma PET 28 mm | 51.858 | 4.454 | 0,087 | A |
+| `MP-12` | Caja corrugada x12 | 5.712 | 492 | 0,087 | A |
+| `MP-07` | Resina PET grado botella | 1.741 | 145 | 0,082 | A |
+| `MP-17` | Pote PP 500 g con tapa | 16.143 | 1.727 | 0,106 | A |
+| `MP-11` | Etiqueta autoadhesiva | 68.001 | 5.860 | 0,087 | A |
+| `MP-08` | Resina HDPE soplado | 1.205 | 100 | 0,082 | B |
+| `MP-13` | Tapa rosca 28 mm con precinto | 32.208 | 3.234 | 0,100 | B |
+| `MP-05` | Espesante carbomero | 194 | 21 | 0,106 | B |
+| `MP-16` | Pallet de madera 1,00 x 1,20 m | 119 | 9 | 0,079 | B |
+| `MP-06` | Alcohol etilico 96 | 888 | 95 | 0,106 | C |
+| `MP-03` | Fragancia limon | 207 | 18 | 0,087 | C |
+| `MP-09` | Masterbatch color | 100 | 8 | 0,082 | C |
+| `MP-04` | Soda caustica escamas | 500 | 54 | 0,106 | C |
+| `MP-15` | Film stretch 23 micrones | 30 | 2 | 0,079 | C |
+
+**Efecto pooling.** Los coeficientes de variacion resultantes caen entre 0,079 y 0,106, por debajo de la variabilidad con la que se genero la demanda de cada SKU (7% a 15%). No es un error: los picos de un producto se compensan con los valles de otro, asi que un material compartido por muchos SKU tiene menos variabilidad relativa que cada SKU por separado. Es el mismo efecto que justifica el pooling de inventarios.
+
+### 10.2 Variabilidad del plazo de entrega
+
+El caso no guarda historial de entregas. El desvio del lead time se deriva de dos datos que si tiene, con supuestos explicitos: el lead time maximo simulado se interpreta como **percentil 95** de la distribucion (Z = 1.645), y esa dispersion se escala por la confiabilidad del proveedor.
+
+```
+sigma_LT = ( LT_maximo - LT_promedio ) / 1,645 / confiabilidad
+```
+
+| Proveedor | LT promedio | LT maximo | Confiabilidad | Sigma LT |
+| --- | ---: | ---: | ---: | ---: |
+| `S1` Quimica del Litoral S.A. | 4 d | 7 d | 96% | 1,90 d |
+| `S2` Insumos Rosario SRL | 7 d | 12 d | 88% | 3,45 d |
+| `S3` Polimeros Andinos S.A. | 12 d | 20 d | 82% | 5,93 d |
+| `S4` Envases y Etiquetas del Sur | 3 d | 6 d | 94% | 1,94 d |
+| `S5` Distribuidora Pampa | 5 d | 9 d | 91% | 2,67 d |
+| `S6` Componentes Plasticos Cuyo S.R.L. | 8 d | 14 d | 79% | 4,62 d |
+
+### 10.3 Analisis ABC
+
+Criterio de valorizacion: consumo diario base por costo unitario. Cortes por participacion acumulada: clase A hasta el 80%, clase B hasta el 95%, clase C el resto. Se usa el consumo **base** y no el del escenario: el ABC es una decision de politica que se revisa cada varios meses, no algo que cambie al mover un control del simulador.
+
+| Clase | Materiales | Consumo valorizado | Politica de reposicion | Periodo de revision S | Cobertura objetivo del lote |
+| :---: | ---: | ---: | --- | ---: | ---: |
+| A | 8 | 76,8% | Revision continua (Q, r) | continua | 10 d |
+| B | 4 | 15,3% | Revision periodica (S, R) | 5 d | 15 d |
+| C | 5 | 7,9% | Revision periodica (S, R) | 20 d | 25 d |
+
+### 10.4 Nivel de servicio y stock de seguridad
+
+El stock de seguridad NO se fija en dias de cobertura. Sale del nivel de servicio que la politica le exige a la clase del material, traducido a un factor Z de la normal estandar.
+
+```
+sigma_plazo     = raiz( plazo x sigma_diario^2 + media_diaria^2 x sigma_LT^2 )
+stock_seguridad = Z x sigma_plazo
+
+plazo protegido = LT                    en revision continua
+plazo protegido = LT + S                en revision periodica
+```
+
+El segundo termino de `sigma_plazo` es el que suele omitirse, y es el que subdimensiona el stock cuando el proveedor es poco confiable. La aplicacion informa que porcentaje del colchon corresponde a cada termino, porque la accion difiere: contra la variabilidad del consumo se mejora el pronostico, contra la del plazo se negocia con el proveedor.
+
+**Niveles de servicio disponibles y su factor Z:**
+
+| Nivel de servicio | Z | Capital inmovilizado en el caso base |
+| --- | ---: | ---: |
+| 84,13% (1 sigma) | 1,0000 | $ 158.525.777 |
+| 93,32% (1,5 sigma) | 1,5000 | $ 237.788.665 |
+| 95,00% | 1,6449 | $ 260.759.051 |
+| 97,72% (2 sigma) | 2,0000 | $ 317.051.554 |
+| 99,00% | 2,3263 | $ 368.778.515 |
+| 99,87% (3 sigma) | 3,0000 | $ 475.577.331 |
+
+El stock de seguridad crece de forma **lineal** con Z, mientras que la probabilidad de no quebrar crece cada vez menos. Pasar de 1 sigma a 3 sigma triplica el capital inmovilizado para ganar 15,7 puntos de probabilidad: ese es el argumento para no exigir 99,87% en todos los materiales.
+
+**Politicas de nivel de servicio por clase ABC:**
+
+| Politica | Clase A | Clase B | Clase C |
+| --- | ---: | ---: | ---: |
+| Estandar | 97,72% | 93,32% | 84,13% |
+| Exigente | 99,87% | 97,72% | 93,32% |
+| Ajustada | 93,32% | 84,13% | 84,13% |
+
+### 10.5 Posicion de inventario
+
+```
+posicion_de_inventario = existencia + ordenado en firme - comprometido
+```
+
+No es lo mismo que la existencia fisica: es lo que dispara la reposicion. En este caso **no hay reservas de material por orden de trabajo**, por lo que el termino comprometido vale cero. Se deja explicito en la formula para que la omision sea visible en lugar de silenciosa.
+
+### 10.6 OEE
+
+```
+OEE = Disponibilidad x Desempeno x Calidad
+
+Disponibilidad = tiempo operativo / tiempo calendario planificado
+Desempeno      = minutos de corrida / tiempo operativo
+Calidad        = unidades buenas / unidades producidas
+```
+
+Los tiempos se descuentan en cascada:
+
+1. **Tiempo calendario planificado**: jornada de la linea menos paradas planificadas.
+2. **Tiempo disponible**: menos eventos de disponibilidad y reduccion de capacidad del escenario.
+3. **Tiempo operativo**: menos cambios de formato.
+
+El setup se imputa como perdida de **disponibilidad** (criterio clasico: la linea esta parada y no produce). El tiempo en que la linea esta habilitada pero no tiene trabajo programado cae en **desempeno**.
+
+**Rendimiento de primera pasada por linea** (parametro de planta, entrada del componente de calidad):
+
+| Linea | Rendimiento de primera pasada |
+| --- | ---: |
+| `L1` Linea 1 - Envasado de liquidos | 98,8% |
+| `L2` Linea 2 - Multiproducto | 97,4% |
+| `L3` Linea 3 - Inyeccion y soplado | 99,1% |
+
+**Resultado con el escenario base:**
+
+| Linea | Disponibilidad | Desempeno | Calidad | OEE |
+| --- | ---: | ---: | ---: | ---: |
+| `L1` | 93,2% | 74,3% | 98,8% | **68,5%** |
+| `L2` | 91,3% | 68,1% | 97,4% | **60,6%** |
+| `L3` | 91,4% | 81,6% | 99,1% | **73,9%** |
+| **Planta** | 92,0% | 74,7% | 98,5% | **67,7%** |
+
+> **Limitacion.** El plan de produccion no modela scrap. El componente de calidad usa el rendimiento de primera pasada declarado en la configuracion de planta: es un parametro del caso, no un resultado del plan. La disponibilidad y el desempeno si se derivan enteros del plan calculado.
+
+### 10.7 Factory Physics: Ley de Little y cotas
+
+```
+rb = 1 / tiempo_de_ciclo        (tasa de cuello de botella)
+T0 = contenido total de trabajo (tiempo neto de proceso)
+W0 = rb x T0                    (WIP critico)
+
+Ley de Little:  WIP = TH x TF
+
+Mejor caso           TH = min(w / T0, rb)         TF = max(T0, w / rb)
+Peor caso practico   TH = w / (W0 + w - 1) x rb   TF = T0 + (w - 1) / rb
+Peor caso            TH = 1 / T0                  TF = w x T0
+```
+
+**Valores del balance recomendado en el preset estable:**
+
+| Descriptor | Valor |
+| --- | ---: |
+| Tasa de cuello de botella rb | 64,3 u/h |
+| Tiempo neto de proceso T0 | 288,0 s |
+| WIP critico W0 = rb x T0 | 5,14 u |
+| Tiempo de flujo en W0 | 288,0 s |
+| Estaciones del balance | 6 |
+
+> **Limitacion.** El caso de balanceo es deterministico y no modela colas ni buffers entre estaciones. Lo que se grafica son las **cotas teoricas** del sistema, utiles para ubicar el punto de operacion, no una simulacion del WIP real de la linea.
+
+### 10.8 Reglas de secuenciamiento
+
+| Regla | Criterio de orden | Favorece |
+| --- | --- | --- |
+| Riesgo de cobertura | Ordena por dias de cobertura restantes y desempata por el riesgo economico de faltante de los proximos dos dias. | Nivel de servicio |
+| EDD (fecha mas temprana) | Ordena por el dia en que el producto quiebra segun el perfil diario de demanda acumulada, no segun la demanda media. | Tardanzas |
+| SPT (trabajo mas corto) | Ordena por los minutos de linea que exige la corrida del dia: primero los trabajos cortos. | Tiempo de flujo |
+| Ratio critico | Ordena por dias hasta el quiebre sobre dias de trabajo pendientes. Por debajo de 1 el trabajo ya no llega a tiempo. | Urgencia ponderada por carga |
+
+```
+ratio_critico = dias_hasta_el_quiebre / dias_de_trabajo_pendientes
+
+  RC > 1  el trabajo llega a tiempo
+  RC < 1  el trabajo va a salir tarde
+  RC < 0  el trabajo ya esta atrasado
+```
+
+La diferencia entre *riesgo de cobertura* y *EDD* no es cosmetica: la primera usa la demanda media diaria, la segunda recorre el perfil real dia por dia e **interpola el momento exacto del quiebre dentro del dia** en que ocurre. Sin esa interpolacion casi todos los productos empatarian en el mismo dia entero y la regla se volveria indistinguible del orden por cobertura.
+
+**Comparacion con capacidad -25% y demanda +20%:**
+
+| Regla | Costo total | Nivel de servicio | Setups | Horas extra | No atendidas |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Riesgo de cobertura | $ 5.419.759 | 99,4% | 10 | 10,6 | 4.700 |
+| EDD (fecha mas temprana) | $ 6.293.232 | 99,1% | 10 | 10,8 | 7.400 |
+| SPT (trabajo mas corto) | $ 12.001.134 | 94,6% | 14 | 14,2 | 43.610 |
+| Ratio critico | $ 6.354.843 | 99,1% | 10 | 11,2 | 7.400 |
+
+Con capacidad holgada las cuatro reglas convergen: si sobra tiempo, el orden importa poco. El resultado bajo restriccion confirma lo que predice la teoria: SPT minimiza el tiempo de flujo pero castiga el nivel de servicio, porque posterga sistematicamente los trabajos largos, que en esta planta son los productos de mayor volumen.
+
+La regla por defecto es **riesgo de cobertura**, que reproduce exactamente el criterio historico del planificador. Cambiar el valor por defecto alteraria todos los resultados publicados del caso, y `npm run verify` lo comprueba explicitamente. La regla solo afecta al plan recomendado: el plan base sigue siempre el orden comercial fijo.
+
+### 10.9 Limitaciones de esta capa estadistica
+
+1. **Sin pronostico estadistico real.** La demanda proyectada sigue siendo un valor puntual; el desvio se estima del historial, pero no hay intervalos de prediccion ni medicion de error de pronostico (MAPE, MAD).
+2. **Normalidad supuesta.** El factor Z asume que la demanda durante el plazo de reposicion se distribuye normal. Con demanda intermitente o muy asimetrica el supuesto no aplica.
+3. **Sigma del lead time derivado, no medido.** Sale de dos supuestos explicitos sobre el lead time maximo y la confiabilidad, no de un historial de entregas.
+4. **Independencia entre consumo y plazo.** La formula de `sigma_plazo` supone que ambas fuentes de variabilidad son independientes; una crisis de mercado que mueva las dos a la vez no esta modelada.
+5. **Calidad del OEE como parametro.** Ver 10.6.
+6. **Sin WIP real en el balanceo.** Ver 10.7.
+7. **ABC sobre una sola variable.** Se clasifica por consumo valorizado. Un ABC completo pondera tambien frecuencia de uso, dificultad de adquisicion y criticidad tecnica.

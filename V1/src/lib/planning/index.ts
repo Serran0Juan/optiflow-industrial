@@ -4,12 +4,14 @@ import { buildBaselinePlan } from "./baseline";
 import { comparePlans, evaluatePlan } from "./evaluate";
 import { buildRecommendedPlan } from "./heuristic";
 import { buildAlerts, buildDecisionSummary, buildMaterialCoverage } from "./insights";
+import { buildOee } from "./oee";
 import { normalizeScenario } from "./scenarios";
 
 export type { PlanningContext } from "./context";
 export { buildPlanningContext } from "./context";
 export { SCENARIO_PRESETS, DEFAULT_SCENARIO, SCENARIO_LIMITS, matchPreset, normalizeScenario } from "./scenarios";
 export { baseForecast } from "./forecast";
+export { buildOee, OEE_BENCHMARKS } from "./oee";
 
 const cache = new Map<string, PlanningResult>();
 const CACHE_LIMIT = 40;
@@ -44,6 +46,7 @@ export function runPlanning(scenario: Scenario, options: { force?: boolean } = {
   const materials = buildMaterialCoverage(recommendedPlan, ctx);
   const alerts = buildAlerts(recommendedEvaluation, materials, ctx);
   const decisions = buildDecisionSummary(comparison, recommendedPlan, ctx);
+  const oee = buildOee(recommendedEvaluation, ctx);
 
   const result: PlanningResult = {
     scenario: normalized,
@@ -55,6 +58,7 @@ export function runPlanning(scenario: Scenario, options: { force?: boolean } = {
     alerts,
     decisions,
     materials,
+    oee,
     computedInMs: now() - started,
   };
 

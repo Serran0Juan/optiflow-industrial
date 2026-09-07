@@ -11,9 +11,13 @@
  * exactamente los mismos numeros.
  */
 import { businessDaysBefore, businessDaysFrom } from "@/lib/dates";
+import { coefficientOfVariation, standardDeviation } from "@/lib/stats";
 import { roundTo } from "@/lib/rng";
 import { baseForecast } from "@/lib/planning/forecast";
 import type {
+  AbcClass,
+  ClassifiedMaterial,
+  MaterialAbcProfile,
   PlanningDay,
   Product,
   PurchaseOrder,
@@ -23,6 +27,9 @@ import type {
 import { BOM_BY_FAMILY } from "./config";
 import { dataset } from "./dataset";
 import {
+  ABC_THRESHOLDS,
+  CONSUMPTION_SIGMA_WINDOW_DAYS,
+  MAX_LEAD_TIME_PERCENTILE_Z,
   PURCHASE_ORDER_SEEDS,
   SUPPLY_BOM_BY_SKU,
   SUPPLY_BOM_EXTRA_BY_FAMILY,
@@ -303,3 +310,129 @@ export const orderOffsets: Record<string, { promised: number; estimated: number 
       { promised: seed.promisedDayOffset, estimated: seed.estimatedDayOffset },
     ]),
   );
+
+/* ------------------------------------------------------------------ */
+/* Variabilidad del consumo y clasificacion ABC                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Serie historica de consumo diario de un material.
+ *
+ * El historial del caso registra demanda de producto terminado, no consumo de
+ * materia prima. Para obtener la serie del material se explota la lista de
+ * materiales dia por dia: el consumo del dia d es la suma, sobre todos los
+ * productos, de su demanda ese dia por su consumo unitario del material.
+ *
+ * Esto importa: el desvio resultante NO es la suma de los desvios de cada
+ * producto. Los picos de un producto se compensan con los valles de otro, de
+ * modo que un material compartido por muchos SKU tiene menos variabilidad
+ * relativa que cada SKU por separado. Es el mismo efecto que sostiene el
+ * pooling de inventarios.
+ */
+function buildConsumptionSeries(materialId: string): number[] {
+  const lines = bomLinesForMaterial(materialId);
+  if (lines.length === 0) return [];
+
+  const demandByProductDay = new Map<string, number>();
+  for (const record of dataset.demandHistory) {
+    demandByProductDay.set(`${record.productId}:${record.dayIndex}`, record.units);
+  }
+
+  const firstDay = Math.max(0, dataset.historyDays.length - CONSUMPTION_SIGMA_WINDOW_DAYS);
+  const series: number[] = [];
+  for (let day = firstDay; day < dataset.historyDays.length; day += 1) {
+    let consumption = 0;
+    for (const line of lines) {
+      consumption +=
+        line.quantityPerUnit * (demandByProductDay.get(`${line.productId}:${day}`) ?? 0);
+    }
+    series.push(consumption);
+  }
+  return series;
+}
+
+/** Series de consumo historico por material, calculadas una sola vez. */
+const consumptionSeries: Record<string, number[]> = Object.fromEntries(
+  SUPPLY_MATERIAL_SEEDS.map((seed) => [seed.code, buildConsumptionSeries(seed.code)]),
+);
+
+/**
+ * Analisis ABC sobre el consumo valorizado (Pareto).
+ *
+ * Criterio de valorizacion: consumo diario base por costo unitario. Se usa el
+ * consumo base y no el del escenario a proposito: la clasificacion ABC es una
+ * decision de politica que se revisa cada varios meses, no algo que deba
+ * cambiar cada vez que alguien mueve un control del simulador.
+ */
+function buildAbcProfiles(): Record<string, MaterialAbcProfile> {
+  const valued = SUPPLY_MATERIAL_SEEDS.map((seed) => ({
+    materialId: seed.code,
+    dailyValue: baseDailyConsumptionByMaterial[seed.code] * seed.unitCost,
+  })).sort((a, b) => b.dailyValue - a.dailyValue || a.materialId.localeCompare(b.materialId));
+
+  const total = valued.reduce((acc, item) => acc + item.dailyValue, 0);
+  const profiles: Record<string, MaterialAbcProfile> = {};
+
+  let cumulative = 0;
+  valued.forEach((item, index) => {
+    const valueShare = total > 0 ? item.dailyValue / total : 0;
+    cumulative += valueShare;
+
+    /* El corte se evalua sobre el acumulado INCLUYENDO al material: asi el
+       material que cruza el 80% queda dentro de la clase A y no fuera. */
+    const abcClass: AbcClass =
+      cumulative <= ABC_THRESHOLDS.a + 1e-9
+        ? "A"
+        : cumulative <= ABC_THRESHOLDS.b + 1e-9
+          ? "B"
+          : "C";
+
+    const series = consumptionSeries[item.materialId] ?? [];
+    const dailySigma = standardDeviation(series);
+
+    profiles[item.materialId] = {
+      materialId: item.materialId,
+      abcClass,
+      rank: index + 1,
+      dailyValue: item.dailyValue,
+      valueShare,
+      cumulativeShare: cumulative,
+      dailySigma,
+      consumptionCv: coefficientOfVariation(series),
+    };
+  });
+
+  /* El primer material del ranking siempre es clase A, aunque por si solo ya
+     supere el corte del 80%: no tendria sentido que el material que mas pesa
+     quedara clasificado como B. */
+  const first = valued[0];
+  if (first) profiles[first.materialId].abcClass = "A";
+
+  return profiles;
+}
+
+export const materialAbcProfiles: Record<string, MaterialAbcProfile> = buildAbcProfiles();
+
+/** Materias primas con su clase ABC y su variabilidad ya incorporadas. */
+export const classifiedMaterials: ClassifiedMaterial[] = supplyMaterials.map((material) => ({
+  ...material,
+  abc: materialAbcProfiles[material.id],
+}));
+
+/**
+ * Desvio del plazo de entrega de un proveedor, en dias habiles.
+ *
+ * El caso no guarda un historial de entregas, asi que el desvio se deriva de
+ * dos datos que si tiene, con supuestos explicitos:
+ *
+ *   1. El lead time maximo simulado se interpreta como el percentil 95 de la
+ *      distribucion de plazos, de donde sigma = (LT_max - LT_medio) / 1,645.
+ *   2. Ese desvio se escala por la confiabilidad del proveedor: un proveedor
+ *      que cumple el 79% de las veces es mas erratico que uno que cumple el
+ *      96%, aun con el mismo rango de plazos.
+ */
+export function leadTimeSigma(supplier: SupplySupplier): number {
+  const spread = Math.max(0, supplier.maxLeadTimeDays - supplier.leadTimeDays);
+  const base = spread / MAX_LEAD_TIME_PERCENTILE_Z;
+  return supplier.reliability > 0 ? base / supplier.reliability : base;
+}

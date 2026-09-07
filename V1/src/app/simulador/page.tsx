@@ -6,7 +6,9 @@ import { CostBreakdownChart, CostComparisonChart } from "@/components/charts/cos
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { SliderField, SwitchField } from "@/components/ui/controls";
+import { SelectField, SliderField, SwitchField } from "@/components/ui/controls";
+import { DISPATCH_RULES, dispatchRuleOption } from "@/lib/planning/dispatch";
+import type { DispatchRule } from "@/lib/planning/dispatch";
 import { Note, PageHeader, TableWrap } from "@/components/ui/layout-bits";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { runPlanning, SCENARIO_LIMITS, SCENARIO_PRESETS } from "@/lib/planning";
@@ -194,6 +196,21 @@ export default function SimulatorPage() {
                   checked={scenario.allowOvertime}
                   onChange={(checked) => updateScenario({ allowOvertime: checked })}
                 />
+              </div>
+              <div className="border-t border-line pt-4">
+                <SelectField
+                  label="Regla de secuenciamiento"
+                  value={scenario.dispatchRule}
+                  options={DISPATCH_RULES.map((rule) => ({ value: rule.id, label: rule.name }))}
+                  onChange={(value) => updateScenario({ dispatchRule: value as DispatchRule })}
+                />
+                <p className="mt-2 text-xs leading-relaxed text-steel-500">
+                  {dispatchRuleOption(scenario.dispatchRule).description} Favorece:{" "}
+                  <strong>{dispatchRuleOption(scenario.dispatchRule).favors}</strong>. Solo afecta al
+                  plan recomendado: el plan base siempre sigue el orden comercial fijo. Con capacidad
+                  holgada las cuatro reglas convergen; las diferencias aparecen cuando la capacidad
+                  aprieta.
+                </p>
               </div>
             </CardContent>
           </Card>

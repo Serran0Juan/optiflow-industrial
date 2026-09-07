@@ -33,6 +33,13 @@ export const CHART_COLORS = {
   inaction: "#c03c33",
 };
 
+/** Color de cada clase del analisis ABC. */
+export const ABC_CHART_COLORS: Record<"A" | "B" | "C", string> = {
+  A: "#234269",
+  B: "#4d74a1",
+  C: "#adc1d8",
+};
+
 /** Color de cada nivel de riesgo de abastecimiento, compartido por los graficos. */
 export const RISK_CHART_COLORS: Record<"critico" | "alto" | "medio" | "bajo", string> = {
   critico: CHART_COLORS.riskCritical,

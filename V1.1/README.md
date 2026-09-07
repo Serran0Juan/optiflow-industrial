@@ -179,13 +179,42 @@ consumo_diario    = SUM_productos( demanda_diaria x consumo_por_unidad ) x (1 + 
 consumo_horizonte = consumo_diario x días_del_horizonte
 stock_proyectado  = stock_disponible + órdenes_firmes_del_horizonte - consumo_horizonte
 cobertura_días    = stock_disponible / consumo_diario
-stock_seguridad   = días_de_seguridad x consumo_diario
-punto_de_pedido   = (consumo_diario x lead_time_promedio) + stock_seguridad
+posición_inv      = existencia + ordenado en firme - comprometido
 ```
+
+El stock de seguridad **no** se fija en días de cobertura: es estadístico y depende del nivel de servicio que la política le exige a la clase ABC del material.
+
+```
+sigma_plazo     = raíz( plazo x sigma_diario^2 + media_diaria^2 x sigma_LT^2 )
+stock_seguridad = Z x sigma_plazo
+
+Revisión continua (Q, r)    r = media_diaria x LT + Z x sigma_LT
+                            Q = media_diaria x T  + Z x sigma_T
+                            se pide Q cuando posición_inv <= r
+
+Revisión periódica (S, R)   R = media_diaria x (S + LT) + Z x sigma_(S+LT)
+                            cada S días se pide R - posición_inv
+```
+
+- **sigma_diario** se estima de los últimos 30 días hábiles del historial, reconstruyendo el consumo del material día por día vía la BOM. El efecto *pooling* aparece solo: los CV resultantes (0,079 a 0,106) quedan por debajo de la variabilidad con la que se generó cada SKU.
+- **sigma_LT** se deriva de dos supuestos explícitos: el lead time máximo se interpreta como percentil 95 (÷ 1,645) y la dispersión se escala por la confiabilidad del proveedor.
+- La aplicación informa **qué porcentaje del colchón** viene de cada término, porque la acción difiere: contra la variabilidad del consumo se mejora el pronóstico, contra la del plazo se negocia con el proveedor.
 
 Si un material no tiene consumo en el horizonte no se divide: se informa como *sin consumo* y queda fuera de promedios y gráficos.
 
 **Orden firme** = confirmada o en tránsito, con llegada estimada dentro del horizonte. Las retrasadas y las pendientes de confirmación no se computan: son el riesgo que el tablero debe mostrar.
+
+### Análisis ABC y políticas de reposición
+
+Los materiales se ordenan por consumo valorizado (consumo diario × costo unitario) y se segmentan por participación acumulada: clase A hasta el 80%, clase B hasta el 95%, clase C el resto. La clasificación usa el consumo **base**, no el del escenario: el ABC es una decisión de política, no un resultado del simulador.
+
+| Clase | Materiales | Consumo valorizado | Política | Nivel de servicio (política estándar) |
+| --- | ---: | ---: | --- | ---: |
+| A | 8 | 76,8% | Revisión continua (Q, r) | 97,72% (2σ) |
+| B | 4 | 15,3% | Revisión periódica (S, R), S = 5 d | 93,32% (1,5σ) |
+| C | 5 | 7,9% | Revisión periódica (S, R), S = 20 d | 84,13% (1σ) |
+
+Tres políticas de nivel de servicio configurables (*estándar*, *exigente*, *ajustada*) mueven el capital inmovilizado en stock de seguridad entre $217 M y $428 M. Es el trade-off central del módulo y está graficado explícitamente.
 
 ### Clasificación de riesgo
 
@@ -228,6 +257,69 @@ Las decisiones se guardan **únicamente en el `localStorage` del navegador** (cl
 Variación de demanda (−20% a +30%), retraso adicional de proveedores (0 a 10 días hábiles), variación de confiabilidad (−20 a +10 p.p.), consumo adicional por scrap (0 a +10%) y horizonte de análisis (7, 14 o 30 días hábiles). Presets: *Operación estable*, *Demanda elevada*, *Proveedor retrasado* y *Riesgo de quiebre*.
 
 El módulo **reutiliza la demanda** del planificador (mismo pronóstico base) pero **mantiene su propio estado de escenario**, igual que el balanceo. Las variables del simulador global (capacidad de línea, tiempos de setup, multiplicador de faltante de producto terminado) no intervienen en una decisión de compra, y acoplarlas habría hecho que mover un control de compras alterara el plan de producción. Los datos originales de la V1 no se modifican: el planificador, el inventario y el balanceo siguen dando exactamente los mismos números.
+
+---
+
+## OEE — capacidad efectiva
+
+```
+OEE = Disponibilidad x Desempeño x Calidad
+
+Disponibilidad = tiempo operativo / tiempo calendario planificado
+Desempeño      = minutos de corrida / tiempo operativo
+Calidad        = unidades buenas / unidades producidas
+```
+
+Los tiempos se descuentan en cascada: jornada de la línea → menos eventos de disponibilidad y reducción del escenario → menos cambios de formato. El setup se imputa como pérdida de **disponibilidad** (la línea está parada); el tiempo habilitado sin trabajo programado cae en **desempeño**.
+
+Resultado del caso base: L1 68,5% · L2 60,6% · L3 73,9% · planta **67,7%**. Referencias: 85% clase mundial, 60% típico, 40% al iniciar mejora.
+
+> El plan **no modela scrap**: el componente de calidad usa el rendimiento de primera pasada declarado por línea en la configuración de planta. Es un parámetro del caso, no un resultado del plan.
+
+---
+
+## Ley de Little y cotas de la línea
+
+El módulo de balanceo ya calculaba el tiempo de ciclo y el contenido de trabajo; nombrarlos permite derivar los descriptores de Factory Physics sin datos nuevos.
+
+```
+rb = 1 / tiempo_de_ciclo        (tasa de cuello de botella)
+T0 = contenido total de trabajo (tiempo neto de proceso)
+W0 = rb x T0                    (WIP crítico)
+
+Ley de Little:  WIP = TH x TF
+
+Mejor caso           TH = min(w / T0, rb)         TF = max(T0, w / rb)
+Peor caso práctico   TH = w / (W0 + w - 1) x rb   TF = T0 + (w - 1) / rb
+```
+
+Caso base: rb = 64,3 u/h, T0 = 288,0 s, W0 = 5,14 u sobre 6 estaciones.
+
+> El caso es determinístico y sin buffers entre puestos: lo que se grafica son **cotas teóricas**, no una simulación del WIP real.
+
+---
+
+## Reglas de secuenciamiento
+
+Dentro de cada bloque de familia, cuatro reglas comparables. La regla por defecto (*riesgo de cobertura*) reproduce exactamente el criterio histórico del planificador.
+
+| Regla | Criterio | Favorece |
+| --- | --- | --- |
+| Riesgo de cobertura | Días de cobertura restantes, desempata por riesgo económico a 2 días | Nivel de servicio |
+| EDD | Momento del quiebre según el perfil diario acumulado, interpolado dentro del día | Tardanzas |
+| SPT | Minutos de línea que exige la corrida del día | Tiempo de flujo |
+| Ratio crítico | días hasta el quiebre / días de trabajo pendientes | Urgencia ponderada por carga |
+
+Con capacidad holgada las cuatro convergen. Bajo restricción (capacidad −25%, demanda +20%):
+
+| Regla | Costo total | Nivel de servicio | No atendidas |
+| --- | ---: | ---: | ---: |
+| Riesgo de cobertura | $ 5.419.759 | 99,4% | 4.700 |
+| EDD | $ 6.293.232 | 99,1% | 7.400 |
+| SPT | $ 12.001.134 | 94,6% | 43.610 |
+| Ratio crítico | $ 6.354.843 | 99,1% | 7.400 |
+
+Confirma lo que predice la teoría: SPT minimiza el tiempo de flujo pero castiga el servicio, porque posterga los trabajos largos —que en esta planta son los productos de mayor volumen.
 
 ---
 
@@ -275,6 +367,10 @@ src/
       recommendations.ts      Motor de reglas, textos explicables y lecturas operativas
       scenarios.ts            Presets y normalización del escenario de abastecimiento
       index.ts                runSupply(): orquestación del módulo
+    balance/factory-physics.ts  Ley de Little, WIP crítico y cotas de throughput
+    planning/oee.ts             OEE por línea y de planta
+    planning/dispatch.ts        Reglas de secuenciamiento (riesgo, EDD, SPT, ratio crítico)
+    stats.ts                    Media, desvío, niveles de servicio y factor Z
     dates.ts, format.ts, rng.ts, types.ts, utils.ts
   state/
     scenario-context.tsx      Estado global del escenario de planificación

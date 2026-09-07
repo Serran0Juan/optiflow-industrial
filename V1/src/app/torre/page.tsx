@@ -14,11 +14,14 @@ import {
   Wallet,
 } from "lucide-react";
 import {
+  AbcParetoChart,
   CoverageByMaterialChart,
   ProjectedStockChart,
   PurchaseVsInactionChart,
   RiskByCategoryChart,
   RiskMatrixChart,
+  SafetyStockDriverChart,
+  ServiceLevelTradeoffChart,
 } from "@/components/charts/supply-charts";
 import { DecisionLog } from "@/components/supply/decision-log";
 import { RecommendationPanel } from "@/components/supply/recommendation-panel";
@@ -32,13 +35,15 @@ import { KpiCard, type KpiTone } from "@/components/ui/kpi-card";
 import { Note, PageHeader } from "@/components/ui/layout-bits";
 import { supplySuppliers } from "@/lib/data/supply-catalog";
 import {
+  ABC_POLICIES,
   MATERIAL_CATEGORY_LABELS,
+  SERVICE_LEVEL_POLICIES,
   SUPPLY_HORIZON_OPTIONS,
-  SUPPLY_REVIEW_PERIOD_DAYS,
 } from "@/lib/data/supply-config";
-import { formatCurrency, formatCurrencyCompact, formatNumber } from "@/lib/format";
+import { formatCurrency, formatCurrencyCompact, formatNumber, formatPercent } from "@/lib/format";
 import { ACTIONABLE_ACTIONS, SUPPLY_LIMITS, SUPPLY_PRESETS } from "@/lib/supply";
 import type {
+  AbcClass,
   DecisionStatus,
   MaterialCategory,
   SupplyRecommendation,
@@ -74,6 +79,14 @@ const DECISION_OPTIONS = [
   })),
 ];
 
+const ABC_OPTIONS = [
+  { value: ALL, label: "Todas las clases ABC" },
+  ...(Object.keys(ABC_POLICIES) as AbcClass[]).map((abcClass) => ({
+    value: abcClass,
+    label: `Clase ${abcClass}`,
+  })),
+];
+
 const SUPPLIER_OPTIONS = [
   { value: ALL, label: "Todos los proveedores" },
   ...supplySuppliers.map((supplier) => ({ value: supplier.id, label: supplier.name })),
@@ -86,6 +99,7 @@ export default function SupplyTowerPage() {
     useSupplyDecisions();
 
   const [riskFilter, setRiskFilter] = useState<string>(ALL);
+  const [abcFilter, setAbcFilter] = useState<string>(ALL);
   const [categoryFilter, setCategoryFilter] = useState<string>(ALL);
   const [supplierFilter, setSupplierFilter] = useState<string>(ALL);
   const [decisionFilter, setDecisionFilter] = useState<string>(ALL);
@@ -104,13 +118,22 @@ export default function SupplyTowerPage() {
     () =>
       result.rows.filter((row) => {
         if (riskFilter !== ALL && row.risk !== riskFilter) return false;
+        if (abcFilter !== ALL && row.abc.abcClass !== abcFilter) return false;
         if (categoryFilter !== ALL && row.material.category !== categoryFilter) return false;
         if (supplierFilter !== ALL && row.supplier.id !== supplierFilter) return false;
         if (decisionFilter !== ALL && decisionStatuses[row.material.id] !== decisionFilter)
           return false;
         return true;
       }),
-    [result.rows, riskFilter, categoryFilter, supplierFilter, decisionFilter, decisionStatuses],
+    [
+      result.rows,
+      riskFilter,
+      abcFilter,
+      categoryFilter,
+      supplierFilter,
+      decisionFilter,
+      decisionStatuses,
+    ],
   );
 
   const filteredRecommendations = useMemo(
@@ -131,14 +154,24 @@ export default function SupplyTowerPage() {
 
   const pendingApprovals = pendingCount(actionableIds);
   const filtersActive =
-    riskFilter !== ALL || categoryFilter !== ALL || supplierFilter !== ALL || decisionFilter !== ALL;
+    riskFilter !== ALL ||
+    abcFilter !== ALL ||
+    categoryFilter !== ALL ||
+    supplierFilter !== ALL ||
+    decisionFilter !== ALL;
 
   const clearFilters = () => {
     setRiskFilter(ALL);
+    setAbcFilter(ALL);
     setCategoryFilter(ALL);
     setSupplierFilter(ALL);
     setDecisionFilter(ALL);
   };
+
+  /* Nivel de servicio que la politica activa le exige a la clase A: es el que
+     encabeza el trade-off y el que se muestra en el KPI del colchon. */
+  const classAServiceLevel =
+    result.serviceLevelTradeoff.find((point) => point.isActiveForClassA)?.probability ?? 0;
 
   const criticalTone: KpiTone = result.kpis.criticalMaterials > 0 ? "danger" : "positive";
   const highTone: KpiTone = result.kpis.highRiskMaterials > 0 ? "warning" : "positive";
@@ -219,6 +252,12 @@ export default function SupplyTowerPage() {
           icon={ClipboardCheck}
           tone={pendingApprovals > 0 ? "warning" : "positive"}
           hint="Recomendaciones que piden una decision humana y todavia no fueron aprobadas, rechazadas ni marcadas para revision."
+        />
+        <KpiCard
+          label="Capital en stock de seguridad"
+          value={formatCurrencyCompact(result.kpis.safetyStockValue)}
+          icon={ShieldAlert}
+          hint={`Colchon exigido por la politica activa, que le pide ${formatPercent(classAServiceLevel, 2)} de nivel de servicio a la clase A. Es Z por el desvio de la demanda durante el plazo de reposicion, valorizado al costo.`}
         />
         <KpiCard
           label="Costo de las compras sugeridas"
@@ -319,6 +358,31 @@ export default function SupplyTowerPage() {
             </div>
 
             <div className="flex flex-col gap-2 border-t border-line pt-4">
+              <p className="text-sm font-medium text-steel-700">
+                Politica de nivel de servicio por clase ABC
+              </p>
+              <ToggleGroup
+                ariaLabel="Politica de nivel de servicio"
+                value={scenario.serviceLevelPolicyId}
+                onChange={(value) => updateScenario({ serviceLevelPolicyId: value })}
+                options={SERVICE_LEVEL_POLICIES.map((policy) => ({
+                  value: policy.id,
+                  label: policy.name,
+                }))}
+              />
+              <p className="text-xs text-steel-500">
+                {
+                  SERVICE_LEVEL_POLICIES.find(
+                    (policy) => policy.id === scenario.serviceLevelPolicyId,
+                  )?.description
+                }{" "}
+                El nivel de servicio define el factor Z que multiplica al desvio de la demanda
+                durante el plazo de reposicion: es lo unico que separa un stock de seguridad
+                defendible de un numero puesto a dedo.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 border-t border-line pt-4">
               <p className="text-sm font-medium text-steel-700">Horizonte de analisis</p>
               <ToggleGroup
                 ariaLabel="Horizonte de analisis en dias habiles"
@@ -395,6 +459,52 @@ export default function SupplyTowerPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Analisis ABC: donde se concentra el consumo valorizado</CardTitle>
+          <CardDescription>
+            Pareto de las materias primas por consumo diario valorizado. Los materiales de clase A
+            concentran el 80% del valor y se gestionan con revision continua (Q, r); los de clase C
+            son muchos, pesan poco y se revisan cada {ABC_POLICIES.C.reviewPeriodDays} dias habiles
+            con politica periodica (S, R). La clasificacion usa el consumo base y no cambia con el
+            escenario: es una decision de politica, no un resultado del simulador.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AbcParetoChart rows={result.rows} />
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Nivel de servicio contra capital inmovilizado</CardTitle>
+            <CardDescription>
+              Cuanto cuesta cada escalon de nivel de servicio. El stock de seguridad crece de forma
+              lineal con el factor Z, mientras que la probabilidad de no quebrar crece cada vez
+              menos: por eso no se le exige 99,87% a todos los materiales, solo a los de clase A.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ServiceLevelTradeoffChart points={result.serviceLevelTradeoff} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>De donde viene el stock de seguridad</CardTitle>
+            <CardDescription>
+              Descomposicion del colchon de cada material entre la variabilidad del consumo y la del
+              plazo de entrega. La distincion define la accion: contra la primera se mejora el
+              pronostico, contra la segunda se negocia con el proveedor.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SafetyStockDriverChart rows={result.rows} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Costo de comprar contra costo de no actuar</CardTitle>
           <CardDescription>
             Para los materiales que proyectan faltante: cuanto cuesta la compra sugerida y cuanto
@@ -424,12 +534,18 @@ export default function SupplyTowerPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="border-b border-line">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <SelectField
               label="Riesgo"
               value={riskFilter}
               options={RISK_OPTIONS}
               onChange={setRiskFilter}
+            />
+            <SelectField
+              label="Clase ABC"
+              value={abcFilter}
+              options={ABC_OPTIONS}
+              onChange={setAbcFilter}
             />
             <SelectField
               label="Categoria"
@@ -545,10 +661,14 @@ export default function SupplyTowerPage() {
         de la demanda proyectada multiplicada por la lista de materiales. Un stock proyectado
         negativo no es, por si solo, una emergencia: significa que hay que comprar durante el
         horizonte. El riesgo critico aparece cuando el material se agota antes de la primera entrega
-        factible, es decir cuando emitir la compra hoy ya no llega a tiempo. La cantidad sugerida
-        cubre el lead time mas el ciclo de revision de compras de {SUPPLY_REVIEW_PERIOD_DAYS} dias
-        habiles y respeta la cantidad minima de cada proveedor, por eso puede superar al faltante
-        estricto. Todos los costos son estimaciones del caso simulado, no cotizaciones reales:{" "}
+        factible, es decir cuando emitir la compra hoy ya no llega a tiempo. El stock de seguridad
+        no se fija por dias de cobertura: es Z por el desvio de la demanda durante el plazo de
+        reposicion, con el Z que corresponde al nivel de servicio de la clase ABC del material. La
+        cantidad sugerida sale de la politica de esa clase (lote Q en revision continua, o lo que
+        falta para el techo R en revision periodica) y respeta la cantidad minima de cada proveedor,
+        por eso puede superar al faltante estricto. Sostener la politica activa inmoviliza{" "}
+        {formatCurrency(result.kpis.safetyStockValue)} en stock de seguridad. Todos los costos son
+        estimaciones del caso simulado, no cotizaciones reales:{" "}
         {formatCurrency(result.kpis.totalPurchaseCost)} de compras propuestas frente a{" "}
         {formatCurrency(result.kpis.costAtRisk)} de margen expuesto.
       </Note>

@@ -6,6 +6,8 @@ import {
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -13,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 import { formatCurrency, formatCurrencyCompact, formatNumber } from "@/lib/format";
+import type { FactoryPhysicsResult } from "@/lib/balance/factory-physics";
 import type { BalanceComparison, BalanceLayout } from "@/lib/types";
 import {
   AXIS_PROPS,
@@ -248,5 +251,110 @@ export function BalanceCostChart({ comparison }: { comparison: BalanceComparison
         </BarChart>
       </ResponsiveContainer>
     </ChartFrame>
+  );
+}
+
+/**
+ * Curva de throughput contra WIP (Factory Physics).
+ *
+ * Muestra las cotas teoricas de la linea: el mejor caso, que solo existe sin
+ * variabilidad, y el peor caso practico, que es la referencia realista. La
+ * marca vertical es el WIP critico W0 = rb x T0, el punto donde la linea
+ * alcanza su maximo throughput con el minimo tiempo de flujo.
+ */
+export function ThroughputWipChart({ physics }: { physics: FactoryPhysicsResult }) {
+  if (physics.curve.length === 0) {
+    return (
+      <p className="rounded-md bg-steel-50 px-4 py-6 text-center text-sm text-steel-600">
+        No hay contenido de trabajo suficiente para trazar la curva.
+      </p>
+    );
+  }
+
+  const data = physics.curve.map((point) => ({
+    wip: point.wip,
+    "Mejor caso": Number(point.bestThroughput.toFixed(1)),
+    "Peor caso practico": Number(point.practicalThroughput.toFixed(1)),
+  }));
+
+  return (
+    <>
+      <ChartFrame height={300}>
+        <ResponsiveContainer>
+          <LineChart data={data} margin={{ top: 18, right: 16, bottom: 4, left: 4 }}>
+            <CartesianGrid stroke={CHART_COLORS.grid} vertical={false} />
+            <XAxis
+              dataKey="wip"
+              {...AXIS_PROPS}
+              axisLine={{ stroke: CHART_COLORS.grid }}
+              label={{
+                value: "WIP (unidades en la linea)",
+                position: "insideBottom",
+                offset: -2,
+                fill: "#5c718a",
+                fontSize: 11,
+              }}
+            />
+            <YAxis
+              {...AXIS_PROPS}
+              axisLine={false}
+              width={56}
+              tickFormatter={(value: number) => formatNumber(value)}
+            />
+            <Tooltip
+              contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              formatter={(value: number | string) => `${formatNumber(Number(value), 1)} u/h`}
+              labelFormatter={(value: number | string) => `WIP = ${formatNumber(Number(value))} unidades`}
+            />
+            <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} iconType="line" iconSize={12} />
+            <ReferenceLine
+              y={physics.bottleneckRatePerHour}
+              stroke={CHART_COLORS.stockout}
+              strokeDasharray="4 3"
+              label={{
+                value: `rb = ${formatNumber(physics.bottleneckRatePerHour, 1)} u/h`,
+                position: "insideTopRight",
+                fill: CHART_COLORS.stockout,
+                fontSize: 11,
+              }}
+            />
+            <ReferenceLine
+              x={Math.round(physics.criticalWip)}
+              stroke={CHART_COLORS.takt}
+              strokeDasharray="4 3"
+              label={{
+                value: `W0 = ${formatNumber(physics.criticalWip, 1)}`,
+                position: "top",
+                fill: CHART_COLORS.takt,
+                fontSize: 11,
+              }}
+            />
+            <Line
+              type="monotone"
+              dataKey="Mejor caso"
+              stroke={CHART_COLORS.recommended}
+              strokeWidth={2}
+              dot={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="Peor caso practico"
+              stroke={CHART_COLORS.overtime}
+              strokeWidth={2}
+              strokeDasharray="5 3"
+              dot={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+      <ChartLegend
+        items={[
+          { label: "Tasa de cuello de botella rb", color: CHART_COLORS.stockout },
+          { label: "WIP critico W0 = rb x T0", color: CHART_COLORS.takt },
+        ]}
+      />
+    </>
   );
 }

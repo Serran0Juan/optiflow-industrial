@@ -6,7 +6,15 @@
  * navegar entre secciones; `force` lo saltea cuando el usuario pide recalcular
  * los riesgos desde la interfaz.
  */
-import type { MaterialSupplyRow, SupplyKpis, SupplyResult, SupplyScenario } from "@/lib/types";
+import { serviceLevelPolicy } from "@/lib/data/supply-config";
+import { SERVICE_LEVELS } from "@/lib/stats";
+import type {
+  MaterialSupplyRow,
+  ServiceLevelTradeoffPoint,
+  SupplyKpis,
+  SupplyResult,
+  SupplyScenario,
+} from "@/lib/types";
 import { buildSupplyContext } from "./context";
 import { buildMaterialRow, NO_CONSUMPTION_COVERAGE, RISK_RANK } from "./metrics";
 import { ACTIONABLE_ACTIONS, buildRecommendations, buildSupplyInsights } from "./recommendations";
@@ -50,9 +58,39 @@ function buildKpis(
     actionableRecommendations: recommendations.filter((item) =>
       ACTIONABLE_ACTIONS.includes(item.action),
     ).length,
-    materialsBelowReorderPoint: rows.filter((row) => row.stockOnHand < row.reorderPoint).length,
+    safetyStockValue: rows.reduce(
+      (acc, row) => acc + row.safetyStockUnits * row.material.unitCost,
+      0,
+    ),
+    materialsBelowReorderPoint: rows.filter((row) => row.inventoryPosition < row.reorderPoint)
+      .length,
     totalPurchaseCost: recommendations.reduce((acc, item) => acc + item.estimatedCost, 0),
   };
+}
+
+/**
+ * Curva de nivel de servicio contra capital inmovilizado.
+ *
+ * El stock de seguridad es Z x sigma_plazo, y sigma_plazo no depende del nivel
+ * de servicio elegido: solo cambia el factor Z. Por eso la curva se obtiene
+ * reescalando el desvio ya calculado de cada material, sin repetir todo el
+ * ciclo de calculo. Es la forma de mostrar cuanto cuesta cada escalon de
+ * servicio antes de comprometerlo.
+ */
+function buildServiceLevelTradeoff(
+  rows: MaterialSupplyRow[],
+  activeClassAId: string,
+): ServiceLevelTradeoffPoint[] {
+  return SERVICE_LEVELS.map((level) => ({
+    label: level.label,
+    probability: level.probability,
+    z: level.z,
+    safetyStockValue: rows.reduce(
+      (acc, row) => acc + level.z * row.sigmaOverLeadTime * row.material.unitCost,
+      0,
+    ),
+    isActiveForClassA: level.id === activeClassAId,
+  }));
 }
 
 export function runSupply(
@@ -89,6 +127,10 @@ export function runSupply(
     orders: ctx.orders,
     recommendations,
     kpis: buildKpis(rows, recommendations, delayedOrders),
+    serviceLevelTradeoff: buildServiceLevelTradeoff(
+      rows,
+      serviceLevelPolicy(normalized.serviceLevelPolicyId).byClass.A,
+    ),
     insights: buildSupplyInsights(rows, recommendations, ctx),
     computedInMs: now() - started,
   };

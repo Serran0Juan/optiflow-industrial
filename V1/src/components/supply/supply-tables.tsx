@@ -2,7 +2,7 @@
 
 import { TableWrap } from "@/components/ui/layout-bits";
 import { MATERIAL_CATEGORY_LABELS } from "@/lib/data/supply-config";
-import { formatCurrency, formatNumber } from "@/lib/format";
+import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { SUPPLY_ACTION_LABELS } from "@/lib/supply/recommendations";
 import type {
   DecisionStatus,
@@ -11,9 +11,11 @@ import type {
   SupplyRecommendation,
 } from "@/lib/types";
 import {
+  AbcBadge,
   DecisionStatusBadge,
   formatCoverage,
   OrderStatusBadge,
+  policyLabel,
   RiskBadge,
 } from "./supply-bits";
 
@@ -44,11 +46,15 @@ export function MaterialsSupplyTable({
       <thead>
         <tr>
           <th>Material</th>
+          <th>ABC / politica</th>
           <th>Proveedor</th>
           <th className="numeric">Stock actual</th>
+          <th className="numeric">Posicion inv.</th>
           <th className="numeric">Consumo proyectado</th>
           <th className="numeric">Cobertura</th>
           <th className="numeric">Lead time</th>
+          <th className="numeric">Stock seguridad</th>
+          <th className="numeric">Punto de pedido</th>
           <th className="numeric">Stock proyectado</th>
           <th>Riesgo</th>
           <th>Recomendacion</th>
@@ -69,6 +75,20 @@ export function MaterialsSupplyTable({
                 </span>
               </td>
               <td>
+                <div className="flex flex-col items-start gap-1">
+                  <AbcBadge
+                    abcClass={row.abc.abcClass}
+                    title={`Puesto ${row.abc.rank} por consumo valorizado: ${formatPercent(row.abc.valueShare, 1)} del total, ${formatPercent(row.abc.cumulativeShare, 1)} acumulado.`}
+                  />
+                  <span className="text-xs text-steel-500">
+                    {policyLabel(row.reviewPolicy)}
+                  </span>
+                  <span className="text-xs text-steel-500">
+                    NS {formatPercent(row.serviceLevel, 2)} (Z {formatNumber(row.serviceLevelZ, 2)})
+                  </span>
+                </div>
+              </td>
+              <td>
                 <span className="block">{row.supplier.name}</span>
                 <span className="block text-xs text-steel-500">
                   Confiabilidad {formatNumber(row.effectiveReliability * 100, 0)}% &middot; minimo{" "}
@@ -79,13 +99,33 @@ export function MaterialsSupplyTable({
                 {formatNumber(row.stockOnHand)} {row.material.unit}
               </td>
               <td className="numeric">
+                {formatNumber(row.inventoryPosition)} {row.material.unit}
+              </td>
+              <td className="numeric">
                 {formatNumber(row.projectedConsumption)} {row.material.unit}
                 <span className="block text-xs text-steel-500">
                   {formatNumber(row.dailyConsumption, 1)} / dia
                 </span>
               </td>
               <td className="numeric">{formatCoverage(row.coverageDays)}</td>
-              <td className="numeric">{formatNumber(row.effectiveLeadTimeDays)} d</td>
+              <td className="numeric">
+                {formatNumber(row.effectiveLeadTimeDays)} d
+                <span className="block text-xs text-steel-500">
+                  sigma {formatNumber(row.leadTimeSigmaDays, 1)} d
+                </span>
+              </td>
+              <td className="numeric">
+                {formatNumber(row.safetyStockUnits)} {row.material.unit}
+                <span className="block text-xs text-steel-500">
+                  {formatPercent(row.sigmaLeadTimeShare, 0)} por plazo
+                </span>
+              </td>
+              <td className="numeric">
+                {formatNumber(row.reorderPoint)} {row.material.unit}
+                <span className="block text-xs text-steel-500">
+                  {row.reviewPolicy === "continua" ? "punto de pedido r" : "techo de stock R"}
+                </span>
+              </td>
               <td
                 className={`numeric ${row.projectedStock < 0 ? "font-semibold text-danger-600" : ""}`}
               >

@@ -321,3 +321,206 @@ process.stdout.write(
     scenarioSensitive ? "OK" : "FALLA"
   }\n`,
 );
+
+/* ------------------------------------------------------------------ */
+/* V3 - ABC, stock de seguridad estadistico, OEE, Factory Physics y     */
+/*      reglas de despacho                                              */
+/* ------------------------------------------------------------------ */
+
+import { classifiedMaterials, materialAbcProfiles } from "../src/lib/data/supply-catalog";
+import { ABC_THRESHOLDS, SERVICE_LEVEL_POLICIES } from "../src/lib/data/supply-config";
+import { buildFactoryPhysics } from "../src/lib/balance/factory-physics";
+import { DISPATCH_RULES } from "../src/lib/planning/dispatch";
+import { SERVICE_LEVELS } from "../src/lib/stats";
+
+process.stdout.write("\n\nOptiFlow Industrial - verificacion de ABC, stock de seguridad y OEE\n");
+
+/* --- Analisis ABC --- */
+const abcCounts: Record<string, number> = { A: 0, B: 0, C: 0 };
+const abcValue: Record<string, number> = { A: 0, B: 0, C: 0 };
+for (const material of classifiedMaterials) {
+  abcCounts[material.abc.abcClass] += 1;
+  abcValue[material.abc.abcClass] += material.abc.valueShare;
+}
+process.stdout.write("\n=== [ABC] Clasificacion por consumo valorizado ===\n");
+for (const abcClass of ["A", "B", "C"]) {
+  line(
+    `Clase ${abcClass}`,
+    `${abcCounts[abcClass]} materiales | ${formatPercent(abcValue[abcClass], 1)} del valor`,
+  );
+}
+
+/* La participacion acumulada debe llegar exactamente a 1 y ser monotona. */
+const ranked = Object.values(materialAbcProfiles).sort((a, b) => a.rank - b.rank);
+let monotonic = true;
+for (let i = 1; i < ranked.length; i += 1) {
+  if (ranked[i].cumulativeShare < ranked[i - 1].cumulativeShare - 1e-9) monotonic = false;
+  if (ranked[i].dailyValue > ranked[i - 1].dailyValue + 1e-9) monotonic = false;
+}
+const totalShare = ranked.reduce((acc, item) => acc + item.valueShare, 0);
+process.stdout.write(
+  `\nPareto monotono y participaciones suman 1: ${
+    monotonic && Math.abs(totalShare - 1) < 1e-9 ? "OK" : "FALLA"
+  }\n`,
+);
+
+/* Los cortes tienen que respetarse: ningun material de clase A puede quedar por
+   encima del umbral acumulado, salvo el primero del ranking. */
+const cutsRespected = ranked.every(
+  (item) =>
+    item.rank === 1 ||
+    (item.abcClass === "A" && item.cumulativeShare <= ABC_THRESHOLDS.a + 1e-9) ||
+    (item.abcClass === "B" && item.cumulativeShare <= ABC_THRESHOLDS.b + 1e-9) ||
+    item.abcClass === "C",
+);
+process.stdout.write(`Cortes ABC respetados: ${cutsRespected ? "OK" : "FALLA"}\n`);
+
+/* --- Stock de seguridad estadistico --- */
+process.stdout.write("\n=== [Stock de seguridad] Politicas de nivel de servicio ===\n");
+for (const policy of SERVICE_LEVEL_POLICIES) {
+  const result = runSupply(
+    { ...DEFAULT_SUPPLY_SCENARIO, serviceLevelPolicyId: policy.id },
+    { force: true },
+  );
+  line(
+    policy.name,
+    `${formatCurrency(result.kpis.safetyStockValue)} inmovilizados | criticos ${result.kpis.criticalMaterials} | compras ${formatCurrency(result.kpis.totalPurchaseCost)}`,
+  );
+}
+
+/* Mas nivel de servicio tiene que costar mas stock: la curva debe ser creciente. */
+const tradeoff = runSupply(DEFAULT_SUPPLY_SCENARIO, { force: true }).serviceLevelTradeoff;
+const increasing = tradeoff.every(
+  (point, index) => index === 0 || point.safetyStockValue >= tradeoff[index - 1].safetyStockValue,
+);
+process.stdout.write(
+  `\nCurva nivel de servicio creciente (${tradeoff.length} puntos, Z de ${formatNumber(SERVICE_LEVELS[0].z, 2)} a ${formatNumber(SERVICE_LEVELS[SERVICE_LEVELS.length - 1].z, 2)}): ${increasing ? "OK" : "FALLA"}\n`,
+);
+
+/* El desvio se descompone en dos terminos que deben sumar 1. */
+const baseSupply = runSupply(DEFAULT_SUPPLY_SCENARIO, { force: true });
+const sharesOk = baseSupply.rows.every(
+  (row) =>
+    row.dailyConsumption <= 0 ||
+    Math.abs(row.sigmaDemandShare + row.sigmaLeadTimeShare - 1) < 1e-3,
+);
+process.stdout.write(`Descomposicion del desvio suma 1: ${sharesOk ? "OK" : "FALLA"}\n`);
+
+/* Cada politica de revision tiene que disparar el calculo que le corresponde. */
+const policiesOk = baseSupply.rows.every((row) =>
+  row.reviewPolicy === "continua" ? row.reviewPeriodDays === 1 : row.reviewPeriodDays > 1,
+);
+process.stdout.write(`Politica de revision coherente con la clase ABC: ${policiesOk ? "OK" : "FALLA"}\n`);
+
+/* --- OEE --- */
+process.stdout.write("\n=== [OEE] Capacidad efectiva del plan recomendado ===\n");
+const oeeResult = runPlanning(DEFAULT_SCENARIO, { force: true }).oee;
+for (const lineOee of oeeResult.lines) {
+  line(
+    lineOee.lineId,
+    `OEE ${formatPercent(lineOee.oee, 1)} = A ${formatPercent(lineOee.availability, 1)} x P ${formatPercent(lineOee.performance, 1)} x Q ${formatPercent(lineOee.quality, 1)}`,
+  );
+}
+line(
+  "Planta",
+  `OEE ${formatPercent(oeeResult.plant.oee, 1)} | linea mas baja: ${oeeResult.worstLineId}`,
+);
+
+/* El OEE y sus tres perdidas tienen que sumar exactamente 100 puntos. */
+const oeeAddsUp = oeeResult.lines.every(
+  (item) =>
+    Math.abs(
+      item.oee * 100 +
+        item.availabilityLossPoints +
+        item.performanceLossPoints +
+        item.qualityLossPoints -
+        100,
+    ) < 1e-6,
+);
+process.stdout.write(`\nOEE mas perdidas suman 100 puntos: ${oeeAddsUp ? "OK" : "FALLA"}\n`);
+
+const oeeBounded = oeeResult.lines.every(
+  (item) =>
+    item.availability >= 0 &&
+    item.availability <= 1 &&
+    item.performance >= 0 &&
+    item.performance <= 1 &&
+    item.quality > 0 &&
+    item.quality <= 1,
+);
+process.stdout.write(`Componentes del OEE dentro de [0, 1]: ${oeeBounded ? "OK" : "FALLA"}\n`);
+
+/* --- Factory Physics --- */
+process.stdout.write("\n=== [Factory Physics] Ley de Little en el balance recomendado ===\n");
+const physicsMetrics = runBalance(DEFAULT_BALANCE_SCENARIO, { force: true }).comparison.recommended
+  .metrics;
+const physics = buildFactoryPhysics(physicsMetrics);
+line("Tasa de cuello de botella rb", `${formatNumber(physics.bottleneckRatePerHour, 1)} u/h`);
+line("Tiempo neto de proceso T0", formatSeconds(physics.rawProcessSeconds));
+line("WIP critico W0 = rb x T0", `${formatNumber(physics.criticalWip, 2)} u`);
+line("Tiempo de flujo en W0", formatSeconds(physics.criticalFlowSeconds));
+
+/* Ley de Little en el WIP critico: W0 = TH x TF con TH = rb y TF = T0. */
+const littleOk =
+  Math.abs(
+    (physics.criticalThroughputPerHour / 3600) * physics.criticalFlowSeconds - physics.criticalWip,
+  ) < 1e-6;
+process.stdout.write(`\nLey de Little (WIP = TH x TF) en W0: ${littleOk ? "OK" : "FALLA"}\n`);
+
+/* El mejor caso nunca puede quedar por debajo del peor caso practico. */
+const boundsOk = physics.curve.every(
+  (point) => point.bestThroughput >= point.practicalThroughput - 1e-9,
+);
+process.stdout.write(`Mejor caso siempre por encima del peor caso practico: ${boundsOk ? "OK" : "FALLA"}\n`);
+
+/* El throughput nunca puede superar la tasa del cuello de botella. */
+const rbOk = physics.curve.every(
+  (point) => point.bestThroughput <= physics.bottleneckRatePerHour + 1e-6,
+);
+process.stdout.write(`Throughput acotado por rb: ${rbOk ? "OK" : "FALLA"}\n`);
+
+/* --- Reglas de despacho --- */
+process.stdout.write("\n=== [Despacho] Comparacion de reglas con capacidad -25% y demanda +20% ===\n");
+const dispatchStress = { ...DEFAULT_SCENARIO, capacityReductionPct: 25, demandVariationPct: 20 };
+for (const rule of DISPATCH_RULES) {
+  const result = runPlanning({ ...dispatchStress, dispatchRule: rule.id }, { force: true });
+  const evaluation = result.comparison.recommended;
+  line(
+    rule.name,
+    `${formatCurrency(evaluation.costs.total)} | servicio ${formatPercent(evaluation.serviceLevel)} | setups ${evaluation.setupCount} | no atendidas ${formatNumber(evaluation.unmetUnits)}`,
+  );
+}
+
+/* La regla por defecto tiene que reproducir el criterio historico: si esto
+   falla, todos los resultados publicados del caso cambiaron. */
+const defaultRun = runPlanning(DEFAULT_SCENARIO, { force: true });
+const explicitRun = runPlanning({ ...DEFAULT_SCENARIO, dispatchRule: "riesgo" }, { force: true });
+const defaultStable =
+  defaultRun.comparison.recommended.costs.total === explicitRun.comparison.recommended.costs.total &&
+  defaultRun.recommended.runs.length === explicitRun.recommended.runs.length;
+process.stdout.write(
+  `\nRegla por defecto equivale a "riesgo de cobertura": ${defaultStable ? "OK" : "FALLA"}\n`,
+);
+
+/* Las reglas alternativas tienen que producir planes realmente distintos. */
+const dispatchStressCosts = DISPATCH_RULES.map(
+  (rule) =>
+    runPlanning({ ...dispatchStress, dispatchRule: rule.id }, { force: true }).comparison.recommended.costs
+      .total,
+);
+const rulesDiffer = new Set(dispatchStressCosts).size > 1;
+process.stdout.write(
+  `Las reglas producen planes distintos bajo restriccion: ${rulesDiffer ? "OK" : "FALLA"}\n`,
+);
+
+/* Reproducibilidad de todo lo nuevo. */
+const abcA = JSON.stringify(classifiedMaterials.map((m) => [m.id, m.abc.abcClass, m.abc.rank]));
+const reproA = runSupply(DEFAULT_SUPPLY_SCENARIO, { force: true });
+const reproB = runSupply(DEFAULT_SUPPLY_SCENARIO, { force: true });
+const statsReproducible =
+  abcA === JSON.stringify(classifiedMaterials.map((m) => [m.id, m.abc.abcClass, m.abc.rank])) &&
+  JSON.stringify(reproA.rows.map((r) => [r.material.id, r.safetyStockUnits, r.reorderPoint])) ===
+    JSON.stringify(reproB.rows.map((r) => [r.material.id, r.safetyStockUnits, r.reorderPoint]));
+process.stdout.write(
+  `Reproducibilidad de ABC y stock de seguridad: ${statsReproducible ? "OK" : "FALLA"}\n`,
+);

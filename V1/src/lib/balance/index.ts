@@ -12,6 +12,7 @@ import { buildBalanceInsights } from "./insights";
 import { buildBalanceContext, buildLayout, round1 } from "./metrics";
 import { normalizeBalanceScenario } from "./scenarios";
 
+export * from "./factory-physics";
 export * from "./metrics";
 export * from "./heuristic";
 export * from "./scenarios";

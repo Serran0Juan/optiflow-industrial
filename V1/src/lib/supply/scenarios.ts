@@ -1,6 +1,9 @@
 import type { SupplyScenario, SupplyScenarioPreset } from "@/lib/types";
 import { clamp } from "@/lib/utils";
-import { SUPPLY_HORIZON_OPTIONS } from "@/lib/data/supply-config";
+import {
+  SERVICE_LEVEL_POLICIES,
+  SUPPLY_HORIZON_OPTIONS,
+} from "@/lib/data/supply-config";
 
 /**
  * Escenarios de la Torre de abastecimiento.
@@ -26,6 +29,7 @@ export const DEFAULT_SUPPLY_SCENARIO: SupplyScenario = {
   reliabilityVariationPoints: 0,
   scrapPct: 0,
   horizonDays: 14,
+  serviceLevelPolicyId: "estandar",
 };
 
 export const SUPPLY_PRESETS: SupplyScenarioPreset[] = [
@@ -47,6 +51,7 @@ export const SUPPLY_PRESETS: SupplyScenarioPreset[] = [
       reliabilityVariationPoints: 0,
       scrapPct: 4,
       horizonDays: 14,
+      serviceLevelPolicyId: "estandar",
     },
   },
   {
@@ -60,6 +65,7 @@ export const SUPPLY_PRESETS: SupplyScenarioPreset[] = [
       reliabilityVariationPoints: -10,
       scrapPct: 0,
       horizonDays: 14,
+      serviceLevelPolicyId: "estandar",
     },
   },
   {
@@ -73,6 +79,7 @@ export const SUPPLY_PRESETS: SupplyScenarioPreset[] = [
       reliabilityVariationPoints: -20,
       scrapPct: 8,
       horizonDays: 30,
+      serviceLevelPolicyId: "exigente",
     },
   },
 ];
@@ -111,6 +118,11 @@ export function normalizeSupplyScenario(scenario: SupplyScenario): SupplyScenari
       SUPPLY_LIMITS.scrapPct.max,
     ),
     horizonDays,
+    serviceLevelPolicyId: SERVICE_LEVEL_POLICIES.some(
+      (policy) => policy.id === scenario.serviceLevelPolicyId,
+    )
+      ? scenario.serviceLevelPolicyId
+      : DEFAULT_SUPPLY_SCENARIO.serviceLevelPolicyId,
   };
 }
 
@@ -121,6 +133,7 @@ export function matchSupplyPreset(scenario: SupplyScenario): SupplyScenarioPrese
       preset.scenario.supplierDelayDays === scenario.supplierDelayDays &&
       preset.scenario.reliabilityVariationPoints === scenario.reliabilityVariationPoints &&
       preset.scenario.scrapPct === scenario.scrapPct &&
-      preset.scenario.horizonDays === scenario.horizonDays,
+      preset.scenario.horizonDays === scenario.horizonDays &&
+      preset.scenario.serviceLevelPolicyId === scenario.serviceLevelPolicyId,
   );
 }

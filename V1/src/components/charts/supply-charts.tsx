@@ -5,6 +5,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -22,8 +23,14 @@ import {
 import { MATERIAL_CATEGORY_LABELS } from "@/lib/data/supply-config";
 import { formatCurrency, formatCurrencyCompact, formatNumber } from "@/lib/format";
 import { NO_CONSUMPTION_COVERAGE } from "@/lib/supply/metrics";
-import type { MaterialSupplyRow, SupplyRecommendation, SupplyRiskLevel } from "@/lib/types";
+import type {
+  MaterialSupplyRow,
+  ServiceLevelTradeoffPoint,
+  SupplyRecommendation,
+  SupplyRiskLevel,
+} from "@/lib/types";
 import {
+  ABC_CHART_COLORS,
   AXIS_PROPS,
   CHART_COLORS,
   ChartFrame,
@@ -427,6 +434,249 @@ export function PurchaseVsInactionChart({
             fill={CHART_COLORS.inaction}
             radius={[4, 4, 0, 0]}
             maxBarSize={38}
+          />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  );
+}
+
+/**
+ * 6. Curva de Pareto del analisis ABC.
+ * Barras: consumo valorizado de cada material, de mayor a menor. Linea: el
+ * porcentaje acumulado. Los cortes en 80% y 95% separan las clases A, B y C.
+ */
+export function AbcParetoChart({ rows }: { rows: MaterialSupplyRow[] }) {
+  const data = [...rows]
+    .sort((a, b) => a.abc.rank - b.abc.rank)
+    .map((row) => ({
+      material: row.material.code,
+      "Consumo valorizado": Math.round(row.abc.dailyValue),
+      Acumulado: Number((row.abc.cumulativeShare * 100).toFixed(1)),
+      abcClass: row.abc.abcClass,
+    }));
+
+  return (
+    <>
+      <ChartFrame height={320}>
+        <ResponsiveContainer>
+          <ComposedChart data={data} margin={{ top: 16, right: 12, bottom: 0, left: 8 }}>
+            <CartesianGrid stroke={CHART_COLORS.grid} vertical={false} />
+            <XAxis dataKey="material" {...AXIS_PROPS} axisLine={{ stroke: CHART_COLORS.grid }} />
+            <YAxis
+              yAxisId="valor"
+              {...AXIS_PROPS}
+              axisLine={false}
+              width={72}
+              tickFormatter={(value: number) => formatCurrencyCompact(value)}
+            />
+            <YAxis
+              yAxisId="pct"
+              orientation="right"
+              domain={[0, 100]}
+              {...AXIS_PROPS}
+              axisLine={false}
+              width={48}
+              tickFormatter={(value: number) => `${formatNumber(value)}%`}
+            />
+            <Tooltip
+              cursor={{ fill: "#f1f5f9" }}
+              contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              formatter={(value: number | string, name: string) =>
+                name === "Acumulado"
+                  ? `${formatNumber(Number(value), 1)}%`
+                  : `${formatCurrency(Number(value))} por dia`
+              }
+            />
+            <ReferenceLine
+              yAxisId="pct"
+              y={80}
+              stroke={CHART_COLORS.takt}
+              strokeDasharray="4 3"
+              label={{ value: "80% (corte A)", position: "insideTopLeft", fill: CHART_COLORS.takt, fontSize: 11 }}
+            />
+            <ReferenceLine
+              yAxisId="pct"
+              y={95}
+              stroke={CHART_COLORS.leadTime}
+              strokeDasharray="2 3"
+              label={{ value: "95% (corte B)", position: "insideBottomLeft", fill: CHART_COLORS.leadTime, fontSize: 11 }}
+            />
+            <Bar yAxisId="valor" dataKey="Consumo valorizado" maxBarSize={30} radius={[3, 3, 0, 0]}>
+              {data.map((entry) => (
+                <Cell key={entry.material} fill={ABC_CHART_COLORS[entry.abcClass]} />
+              ))}
+            </Bar>
+            <Line
+              yAxisId="pct"
+              type="monotone"
+              dataKey="Acumulado"
+              stroke={CHART_COLORS.takt}
+              strokeWidth={2}
+              dot={{ r: 2 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+      <ChartLegend
+        items={[
+          { label: "Clase A", color: ABC_CHART_COLORS.A },
+          { label: "Clase B", color: ABC_CHART_COLORS.B },
+          { label: "Clase C", color: ABC_CHART_COLORS.C },
+          { label: "Consumo valorizado acumulado", color: CHART_COLORS.takt },
+        ]}
+      />
+    </>
+  );
+}
+
+/**
+ * 7. Nivel de servicio contra capital inmovilizado en stock de seguridad.
+ * Muestra el precio de cada escalon de servicio: el stock de seguridad crece de
+ * forma lineal con Z, mientras que la probabilidad de no quebrar crece cada vez
+ * menos. Es el argumento para no pedir 99,87% en todos los materiales.
+ */
+export function ServiceLevelTradeoffChart({
+  points,
+}: {
+  points: ServiceLevelTradeoffPoint[];
+}) {
+  const data = points.map((point) => ({
+    nivel: `${formatNumber(point.probability * 100, 2)}%`,
+    "Stock de seguridad": Math.round(point.safetyStockValue),
+    activo: point.isActiveForClassA,
+    z: point.z,
+  }));
+
+  const active = data.find((item) => item.activo);
+
+  return (
+    <>
+      <ChartFrame height={300}>
+        <ResponsiveContainer>
+          <ComposedChart data={data} margin={{ top: 16, right: 12, bottom: 0, left: 8 }}>
+            <CartesianGrid stroke={CHART_COLORS.grid} vertical={false} />
+            <XAxis dataKey="nivel" {...AXIS_PROPS} axisLine={{ stroke: CHART_COLORS.grid }} />
+            <YAxis
+              {...AXIS_PROPS}
+              axisLine={false}
+              width={72}
+              tickFormatter={(value: number) => formatCurrencyCompact(value)}
+            />
+            <Tooltip
+              cursor={{ fill: "#f1f5f9" }}
+              contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              formatter={(value: number | string, _name: string, item: { payload?: unknown }) => {
+                const payload = item.payload as { z?: number } | undefined;
+                return `${formatCurrency(Number(value))} (Z = ${formatNumber(payload?.z ?? 0, 2)})`;
+              }}
+            />
+            {active ? (
+              <ReferenceLine
+                x={active.nivel}
+                stroke={CHART_COLORS.riskLow}
+                strokeDasharray="4 3"
+                label={{
+                  value: "politica activa (clase A)",
+                  position: "top",
+                  fill: CHART_COLORS.riskLow,
+                  fontSize: 11,
+                }}
+              />
+            ) : null}
+            <Bar dataKey="Stock de seguridad" maxBarSize={54} radius={[4, 4, 0, 0]}>
+              {data.map((entry) => (
+                <Cell
+                  key={entry.nivel}
+                  fill={entry.activo ? CHART_COLORS.riskLow : CHART_COLORS.safety}
+                />
+              ))}
+            </Bar>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+      <ChartLegend
+        items={[
+          { label: "Capital inmovilizado por nivel de servicio", color: CHART_COLORS.safety },
+          { label: "Nivel exigido hoy a la clase A", color: CHART_COLORS.riskLow },
+        ]}
+      />
+    </>
+  );
+}
+
+/**
+ * 8. Origen del stock de seguridad por material.
+ * Separa que parte del colchon existe por la variabilidad del consumo y que
+ * parte por la del plazo de entrega. Cambia la accion: la primera se ataca con
+ * pronostico, la segunda negociando con el proveedor.
+ */
+export function SafetyStockDriverChart({ rows }: { rows: MaterialSupplyRow[] }) {
+  const data = [...rows]
+    .filter((row) => row.safetyStockUnits > 0)
+    .map((row) => ({
+      material: row.material.code,
+      value: row.safetyStockUnits * row.material.unitCost,
+      demand: row.sigmaDemandShare,
+      lead: row.sigmaLeadTimeShare,
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10)
+    .map((item) => ({
+      material: item.material,
+      "Por variabilidad del consumo": Math.round(item.value * item.demand),
+      "Por variabilidad del plazo": Math.round(item.value * item.lead),
+    }));
+
+  if (data.length === 0) {
+    return (
+      <p className="rounded-md bg-steel-50 px-4 py-6 text-center text-sm text-steel-600">
+        No hay stock de seguridad exigido en este escenario.
+      </p>
+    );
+  }
+
+  return (
+    <ChartFrame height={Math.max(260, 32 * data.length + 60)}>
+      <ResponsiveContainer>
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 20, bottom: 4, left: 4 }}
+          barCategoryGap="22%"
+        >
+          <CartesianGrid stroke={CHART_COLORS.grid} horizontal={false} />
+          <XAxis
+            type="number"
+            {...AXIS_PROPS}
+            axisLine={{ stroke: CHART_COLORS.grid }}
+            tickFormatter={(value: number) => formatCurrencyCompact(value)}
+          />
+          <YAxis type="category" dataKey="material" {...AXIS_PROPS} axisLine={false} width={58} />
+          <Tooltip
+            cursor={{ fill: "#f1f5f9" }}
+            contentStyle={TOOLTIP_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            formatter={(value: number | string) => formatCurrency(Number(value))}
+          />
+          <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} iconType="square" iconSize={10} />
+          <Bar
+            dataKey="Por variabilidad del consumo"
+            stackId="ss"
+            fill={CHART_COLORS.coverage}
+            maxBarSize={20}
+          />
+          <Bar
+            dataKey="Por variabilidad del plazo"
+            stackId="ss"
+            fill={CHART_COLORS.riskHigh}
+            radius={[0, 3, 3, 0]}
+            maxBarSize={20}
           />
         </BarChart>
       </ResponsiveContainer>

@@ -61,6 +61,8 @@ export interface LineDefinition {
   initialFamilyId: FamilyId;
   /** Carga objetivo con la que se dimensiona la demanda del caso. */
   targetLoad: number;
+  /** Rendimiento de primera pasada de la linea (entrada del indicador OEE). */
+  firstPassYield: number;
 }
 
 export const LINE_DEFINITIONS: LineDefinition[] = [
@@ -77,6 +79,7 @@ export const LINE_DEFINITIONS: LineDefinition[] = [
     familiesAllowed: ["LIQ", "CRE"],
     initialFamilyId: "LIQ",
     targetLoad: 0.80,
+    firstPassYield: 0.988,
   },
   {
     id: "L2",
@@ -91,6 +94,7 @@ export const LINE_DEFINITIONS: LineDefinition[] = [
     familiesAllowed: ["LIQ", "CRE", "ENV"],
     initialFamilyId: "CRE",
     targetLoad: 0.78,
+    firstPassYield: 0.974,
   },
   {
     id: "L3",
@@ -105,6 +109,7 @@ export const LINE_DEFINITIONS: LineDefinition[] = [
     familiesAllowed: ["ENV", "CRE"],
     initialFamilyId: "ENV",
     targetLoad: 0.82,
+    firstPassYield: 0.991,
   },
 ];
 

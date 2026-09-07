@@ -7,17 +7,20 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import { formatMinutes, formatNumber } from "@/lib/format";
-import type { PlanEvaluation, PlanningDay, ProductionPlan } from "@/lib/types";
+import { OEE_BENCHMARKS } from "@/lib/planning/oee";
+import type { OeeResult, PlanEvaluation, PlanningDay, ProductionPlan } from "@/lib/types";
 import {
   AXIS_PROPS,
   CHART_COLORS,
   ChartFrame,
+  ChartLegend,
   TOOLTIP_ITEM_STYLE,
   TOOLTIP_LABEL_STYLE,
   TOOLTIP_STYLE,
@@ -135,5 +138,88 @@ export function LineLoadChart({
         </BarChart>
       </ResponsiveContainer>
     </ChartFrame>
+  );
+}
+
+/**
+ * OEE por linea, abierto en sus tres componentes.
+ *
+ * Barras apiladas que suman 100 puntos: el OEE alcanzado mas las tres perdidas
+ * que lo separan del 100%. Leerlo asi evita la trampa habitual del indicador,
+ * que es mirar un OEE bajo sin saber cual de los tres factores lo hunde.
+ */
+export function OeeByLineChart({ oee }: { oee: OeeResult }) {
+  const data = oee.lines.map((line) => ({
+    linea: line.lineId,
+    nombre: line.lineName,
+    OEE: Number((line.oee * 100).toFixed(1)),
+    "Perdida por disponibilidad": Number(line.availabilityLossPoints.toFixed(1)),
+    "Perdida por desempeno": Number(line.performanceLossPoints.toFixed(1)),
+    "Perdida por calidad": Number(line.qualityLossPoints.toFixed(1)),
+  }));
+
+  return (
+    <>
+      <ChartFrame height={300}>
+        <ResponsiveContainer>
+          <BarChart data={data} margin={{ top: 20, right: 12, bottom: 0, left: 8 }}>
+            <CartesianGrid stroke={CHART_COLORS.grid} vertical={false} />
+            <XAxis dataKey="linea" {...AXIS_PROPS} axisLine={{ stroke: CHART_COLORS.grid }} />
+            <YAxis
+              domain={[0, 100]}
+              {...AXIS_PROPS}
+              axisLine={false}
+              width={48}
+              tickFormatter={(value: number) => `${formatNumber(value)}%`}
+            />
+            <Tooltip
+              cursor={{ fill: "#f1f5f9" }}
+              contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              formatter={(value: number | string) => `${formatNumber(Number(value), 1)} puntos`}
+            />
+            <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} iconType="square" iconSize={10} />
+            <ReferenceLine
+              y={OEE_BENCHMARKS.worldClass * 100}
+              stroke={CHART_COLORS.positive}
+              strokeDasharray="4 3"
+              label={{
+                value: `clase mundial ${formatNumber(OEE_BENCHMARKS.worldClass * 100)}%`,
+                position: "top",
+                fill: CHART_COLORS.positive,
+                fontSize: 11,
+              }}
+            />
+            <Bar dataKey="OEE" stackId="oee" fill={CHART_COLORS.recommended} maxBarSize={80} />
+            <Bar
+              dataKey="Perdida por disponibilidad"
+              stackId="oee"
+              fill={CHART_COLORS.overtime}
+              maxBarSize={80}
+            />
+            <Bar
+              dataKey="Perdida por desempeno"
+              stackId="oee"
+              fill={CHART_COLORS.holding}
+              maxBarSize={80}
+            />
+            <Bar
+              dataKey="Perdida por calidad"
+              stackId="oee"
+              fill={CHART_COLORS.stockout}
+              radius={[4, 4, 0, 0]}
+              maxBarSize={80}
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+      <ChartLegend
+        items={oee.lines.map((line) => ({
+          label: `${line.lineId}: ${line.lineName}`,
+          color: CHART_COLORS.recommended,
+        }))}
+      />
+    </>
   );
 }

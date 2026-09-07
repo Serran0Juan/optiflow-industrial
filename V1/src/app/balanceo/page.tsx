@@ -18,6 +18,7 @@ import {
   BalanceCostChart,
   EfficiencyCapacityChart,
   StationLoadChart,
+  ThroughputWipChart,
 } from "@/components/charts/balance-charts";
 import { LayoutComparisonTable, TaskAssignmentTable } from "@/components/balance/balance-tables";
 import { StageLegend, StationBoard } from "@/components/balance/station-board";
@@ -27,7 +28,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { SliderField, SwitchField, ToggleGroup } from "@/components/ui/controls";
 import { KpiCard, type KpiTone } from "@/components/ui/kpi-card";
 import { Note, PageHeader } from "@/components/ui/layout-bits";
-import { BALANCE_LIMITS, BALANCE_PRESETS, SHIFT_COUNT_OPTIONS } from "@/lib/balance";
+import {
+  BALANCE_LIMITS,
+  BALANCE_PRESETS,
+  buildFactoryPhysics,
+  SHIFT_COUNT_OPTIONS,
+} from "@/lib/balance";
 import { assemblyLine } from "@/lib/data/assembly-line";
 import {
   formatCurrency,
@@ -48,6 +54,10 @@ export default function BalancePage() {
   const board = boardView === "recomendado" ? recommended : initial;
   const bottleneck =
     recommended.stations.find((station) => station.isBottleneck) ?? recommended.stations[0];
+
+  /* Descriptores de Factory Physics del balance recomendado: se derivan de las
+     mismas metricas que ya calcula el modulo, sin datos adicionales. */
+  const physics = buildFactoryPhysics(recommended.metrics);
 
   const costTone: KpiTone = result.comparison.improves
     ? "positive"
@@ -391,6 +401,66 @@ export default function BalancePage() {
               </li>
             ))}
           </ul>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ley de Little y cotas de la linea</CardTitle>
+          <CardDescription>
+            Los dos descriptores que gobiernan cualquier linea de produccion salen de los numeros que
+            el balanceo ya calculo: la tasa de cuello de botella rb = 1 / tiempo de ciclo y el tiempo
+            neto de proceso T0 = contenido total de trabajo. De ahi sale el WIP critico W0 = rb x T0,
+            el nivel de inventario en proceso con el que la linea alcanza su maximo throughput con el
+            minimo tiempo de flujo.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm lg:grid-cols-4">
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-steel-500">
+                Tasa de cuello de botella (rb)
+              </dt>
+              <dd className="mt-1 font-semibold tabular-nums text-navy-800">
+                {formatNumber(physics.bottleneckRatePerHour, 1)} u/h
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-steel-500">
+                Tiempo neto de proceso (T0)
+              </dt>
+              <dd className="mt-1 font-semibold tabular-nums text-navy-800">
+                {formatSeconds(physics.rawProcessSeconds)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-steel-500">
+                WIP critico (W0 = rb x T0)
+              </dt>
+              <dd className="mt-1 font-semibold tabular-nums text-navy-800">
+                {formatNumber(physics.criticalWip, 2)} u
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-steel-500">
+                Tiempo de flujo en W0
+              </dt>
+              <dd className="mt-1 font-semibold tabular-nums text-navy-800">
+                {formatSeconds(physics.criticalFlowSeconds)}
+              </dd>
+            </div>
+          </dl>
+          <ThroughputWipChart physics={physics} />
+          <Note tone="info" title="Que dice y que no dice esta curva">
+            La Ley de Little (WIP = throughput x tiempo de flujo) se cumple siempre, con o sin
+            variabilidad. Por eso subir el WIP por encima de W0 no aumenta el throughput: solo alarga
+            el tiempo de flujo, porque el ritmo ya quedo limitado por el cuello de botella. Bajarlo
+            por debajo de W0 tampoco es gratis: el cuello de botella se queda sin material y se
+            pierde throughput. Este modulo <strong>no simula el WIP real</strong> de la linea, que es
+            deterministica y sin buffers entre puestos: lo que se grafica son las cotas teoricas del
+            sistema, utiles para ubicar el punto de operacion, no para afirmar cuanto inventario en
+            proceso hay hoy.
+          </Note>
         </CardContent>
       </Card>
 

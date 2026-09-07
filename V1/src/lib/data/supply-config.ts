@@ -18,6 +18,8 @@
  * inventario y el balanceo siguen viendo exactamente los mismos numeros.
  */
 import type {
+  AbcClass,
+  ReviewPolicy,
   FamilyId,
   MaterialCategory,
   PurchaseOrderStatus,
@@ -451,3 +453,120 @@ export const PURCHASE_ORDER_SEEDS: PurchaseOrderSeed[] = [
     delayRisk: 0.2,
   },
 ];
+
+/* ------------------------------------------------------------------ */
+/* Clasificacion ABC y politica de reposicion por clase                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cortes del analisis ABC sobre el consumo valorizado acumulado (Pareto).
+ * Clase A hasta el 80% del valor, clase B hasta el 95%, clase C el resto.
+ */
+export const ABC_THRESHOLDS = { a: 0.8, b: 0.95 } as const;
+
+/**
+ * Ventana de historial usada para estimar el desvio del consumo diario.
+ *
+ * Se usan los ultimos 30 dias habiles y no los 90 disponibles a proposito: el
+ * historial del caso tiene tendencia, y una ventana larga la confunde con
+ * dispersion, inflando el desvio y con el el stock de seguridad.
+ */
+export const CONSUMPTION_SIGMA_WINDOW_DAYS = 30;
+
+/**
+ * Interpretacion del lead time maximo simulado dentro de la distribucion de
+ * plazos de entrega: se toma como percentil 95 (Z = 1,645).
+ */
+export const MAX_LEAD_TIME_PERCENTILE_Z = 1.645;
+
+/* La politica de reposicion (continua / periodica) se declara en types.ts. */
+
+export interface AbcClassPolicy {
+  abcClass: AbcClass;
+  label: string;
+  policy: ReviewPolicy;
+  /**
+   * Periodo de revision S, en dias habiles. Solo aplica a la politica
+   * periodica; en la continua la posicion de inventario se mira todos los dias.
+   */
+  reviewPeriodDays: number;
+  /** Dias de consumo que busca cubrir el lote Q en la politica continua. */
+  orderCoverDays: number;
+  description: string;
+}
+
+/**
+ * Politica por clase, siguiendo el criterio clasico de gestion de inventarios:
+ * los pocos materiales que concentran el valor se siguen de cerca y con alto
+ * nivel de servicio; los muchos que casi no pesan se revisan cada tanto.
+ */
+export const ABC_POLICIES: Record<AbcClass, AbcClassPolicy> = {
+  A: {
+    abcClass: "A",
+    label: "Clase A",
+    policy: "continua",
+    reviewPeriodDays: 1,
+    orderCoverDays: 10,
+    description:
+      "Concentran el grueso del consumo valorizado: seguimiento continuo (Q, r), se pide apenas la posicion de inventario toca el punto de pedido.",
+  },
+  B: {
+    abcClass: "B",
+    label: "Clase B",
+    policy: "periodica",
+    reviewPeriodDays: 5,
+    orderCoverDays: 15,
+    description:
+      "Peso intermedio: revision periodica (S, R) cada 5 dias habiles, reponiendo hasta el techo de stock.",
+  },
+  C: {
+    abcClass: "C",
+    label: "Clase C",
+    policy: "periodica",
+    reviewPeriodDays: 20,
+    orderCoverDays: 25,
+    description:
+      "Muchos materiales de bajo valor: revision periodica (S, R) cada 20 dias habiles, con lotes grandes y bajo costo de inmovilizado.",
+  },
+};
+
+/**
+ * Politicas de nivel de servicio: que probabilidad de no quebrar se le exige a
+ * cada clase ABC. Es la decision comercial que traduce el analisis ABC en
+ * pesos de stock de seguridad.
+ */
+export interface ServiceLevelPolicy {
+  id: string;
+  name: string;
+  description: string;
+  /** Identificador del nivel de servicio (ver SERVICE_LEVELS) por clase. */
+  byClass: Record<AbcClass, string>;
+}
+
+export const SERVICE_LEVEL_POLICIES: ServiceLevelPolicy[] = [
+  {
+    id: "estandar",
+    name: "Estandar",
+    description:
+      "Criterio habitual de planta: 97,72% (2 sigma) en los materiales de clase A, 93,32% en clase B y 84,13% en clase C.",
+    byClass: { A: "s2", B: "s1-5", C: "s1" },
+  },
+  {
+    id: "exigente",
+    name: "Exigente",
+    description:
+      "Prioriza no frenar la linea por encima del capital inmovilizado: 99,87% (3 sigma) en clase A, 97,72% en B y 93,32% en C.",
+    byClass: { A: "s3", B: "s2", C: "s1-5" },
+  },
+  {
+    id: "ajustada",
+    name: "Ajustada",
+    description:
+      "Prioriza liberar capital de trabajo: 93,32% en clase A y 84,13% en clase B y C. Sube el riesgo de quiebre.",
+    byClass: { A: "s1-5", B: "s1", C: "s1" },
+  },
+];
+
+export function serviceLevelPolicy(id: string): ServiceLevelPolicy {
+  return SERVICE_LEVEL_POLICIES.find((policy) => policy.id === id) ?? SERVICE_LEVEL_POLICIES[0];
+}
