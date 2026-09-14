@@ -44,7 +44,6 @@ const SECTIONS = [
   { id: "despacho", label: "Reglas de secuenciamiento" },
   { id: "lean", label: "Desperdicios Lean" },
   { id: "limitaciones", label: "Limitaciones generales" },
-  { id: "roadmap", label: "Roadmap V2.1" },
 ];
 
 function Section({ id, title, description, children }: { id: string; title: string; description?: string; children: ReactNode }) {
@@ -1635,53 +1634,6 @@ Peor caso           TH = 1 / T0                   TF = w x T0`}</Formula>
             la que muestra el caso.
           </li>
         </ul>
-      </Section>
-
-      <Section
-        id="roadmap"
-        title="Roadmap V2.1"
-        description="Funcionalidad prevista para la siguiente version, hoy no implementada."
-      >
-        <p>
-          La V2 cierra el circuito de decision de compra con datos sinteticos y reglas explicitas. Lo
-          que sigue apunta a reemplazar esos datos por informacion real y a medir si las
-          recomendaciones efectivamente mejoran el resultado.
-        </p>
-        <ul className="ml-5 list-disc space-y-1.5">
-          <li>
-            <strong>Carga y lectura de cotizaciones, remitos y facturas reales.</strong> Subir los
-            documentos que hoy llegan por correo y que alguien tipea a mano en una planilla.
-          </li>
-          <li>
-            <strong>Extraccion de datos documentales.</strong> Obtener del documento el proveedor, el
-            material, la cantidad, el precio y la fecha, con el fragmento de origen a la vista para
-            poder auditarlo.
-          </li>
-          <li>
-            <strong>Comparacion automatica de precios, cantidades y fechas.</strong> Contrastar la
-            cotizacion contra la orden y el remito contra lo efectivamente recibido, y marcar las
-            diferencias.
-          </li>
-          <li>
-            <strong>RAG sobre politicas de compra y fichas tecnicas.</strong> Consulta asistida de
-            politicas internas (proveedores homologados, limites de compra, lead times acordados) y de
-            especificaciones de material, siempre con cita al documento fuente.
-          </li>
-          <li>
-            <strong>Trazabilidad y evaluacion de recomendaciones.</strong> Persistir que se recomendo,
-            con que datos, quien lo aprobo y que paso despues, para medir la tasa de acierto del motor
-            de reglas en lugar de suponerla.
-          </li>
-          <li>
-            <strong>Integracion con una fuente de datos real.</strong> Reemplazar el caso sintetico por
-            stock, ordenes y precios provenientes de un ERP o de un archivo exportado por la planta.
-          </li>
-        </ul>
-        <Note tone="warning" title="Nada de esto esta implementado hoy">
-          La V2 no lee documentos, no consulta ningun modelo de lenguaje, no compara precios reales y
-          no emite ordenes de compra. Cualquier pantalla que sugiriera lo contrario seria una
-          simulacion de funcionalidad, y este proyecto evita deliberadamente ese tipo de demostracion.
-        </Note>
       </Section>
 
       <Card>
