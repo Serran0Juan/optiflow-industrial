@@ -20,7 +20,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-navy-800 lg:flex">
+      {/* El contenido del sidebar (logo + 7 items de navegacion de dos lineas +
+          bloque de horizonte) supera los 840 px y no entra en pantallas de
+          altura tipica. Sin overflow propio, el bloque inferior queda cortado
+          contra el borde y es inalcanzable: el sidebar scrollea por su cuenta. */}
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto bg-navy-800 lg:flex">
         <div className="flex items-center gap-3 border-b border-navy-700 px-5 py-4">
           <span className="rounded-md bg-navy-600 p-2 text-white">
             <Factory className="h-5 w-5" aria-hidden />
