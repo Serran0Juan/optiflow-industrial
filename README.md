@@ -40,6 +40,7 @@ OptiFlow Industrial modela estas tensiones de forma explícita y muestra, en pes
 | Módulo | Funcionalidad |
 | --- | --- |
 | Dashboard | KPI ejecutivos de costo, nivel de servicio, setups, utilización y **OEE** (disponibilidad × desempeño × calidad) |
+| Planta en movimiento | Plano interactivo de las tres líneas, reproducción de una jornada, colas finitas, calidad, paradas y despacho compartido; comparación de incidentes y exportación CSV |
 | Plan de producción | Comparación entre un plan base (orden comercial fijo) y un plan recomendado por heurística |
 | Inventario | Stock de producto terminado, consumo proyectado, producción planificada y riesgo de quiebre |
 | Simulador | Variación de demanda, reducción de capacidad, aumento de setups, multiplicador de faltante, horas extra y **regla de secuenciamiento** (riesgo / EDD / SPT / ratio crítico) |
@@ -196,6 +197,7 @@ npm run typecheck   # Verificación de tipos con tsc
 npm run lint        # Linter de Next.js
 npm run build       # Build de producción
 npm run verify       # Recalcula escenarios y verifica reproducibilidad de los tres módulos
+npm run verify:plant # Conservación del flujo, límites y escenarios de la planta
 ```
 
 ---
@@ -216,6 +218,16 @@ npm run verify       # Recalcula escenarios y verifica reproducibilidad de los t
 ---
 
 ## Datos y limitaciones
+
+### Simulación visual de la planta
+
+La ruta `/planta` reproduce una jornada del plan base o recomendado. Selecciona un día, presiona **Reproducir** y elige **Operación normal**, **Parada en línea 2**, **Insumos demorados** o **Despacho limitado**. Puedes pausar, avanzar una hora, mover el reloj y consultar la proyección al cierre. El panel **Ajustar la operación** permite modificar velocidades, suministro, mantenimiento, despacho, espacio de espera y pérdida de calidad. **Exportar jornada** descarga la serie de resultados por minuto junto con sus parámetros.
+
+El plano es conceptual, sin escala. Los volúmenes, velocidades, secuencias, setups y tiempos disponibles vienen del plan existente; el flujo entre cuatro etapas, las colas y el despacho son supuestos adicionales. Se modelan cantidades agregadas en pasos de un minuto, no trayectorias individuales. Cada día comienza sin trabajo en proceso ni producto en expedición. Las líneas son independientes: no se infiere una alimentación de L3 hacia L1/L2. La calidad se descuenta en esta simulación sin modificar los costos o las unidades del planificador semanal.
+
+Ver [supuestos y fórmulas de la planta](./V1.1/PLANT_SIMULATION.md).
+
+### Límites generales
 
 - Todos los datos (demanda, capacidades, costos, materiales, proveedores) son **sintéticos y generados de forma determinista**; no corresponden a ninguna empresa real.
 - Los costos e impactos económicos son **supuestos del caso simulado**, expresados en una moneda ficticia.

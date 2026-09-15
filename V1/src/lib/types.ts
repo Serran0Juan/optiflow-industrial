@@ -68,9 +68,9 @@ export interface ProductionLine {
   initialFamilyId: FamilyId;
   /**
    * Rendimiento de primera pasada: fraccion de unidades que sale conforme sin
-   * retrabajo. Es un parametro de planta usado UNICAMENTE para el indicador
-   * OEE; el plan de produccion no modela scrap, por lo que no afecta ni las
-   * unidades programadas ni los costos.
+   * retrabajo. En el planificador se usa para OEE sin afectar cantidades ni
+   * costos. La simulacion visual de planta lo aplica al flujo de calidad,
+   * sin modificar las unidades programadas del plan de produccion.
    */
   firstPassYield: number;
 }

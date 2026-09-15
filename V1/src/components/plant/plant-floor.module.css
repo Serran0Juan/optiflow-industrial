@@ -1,0 +1,39 @@
+.floor {
+  overflow: hidden;
+  margin: 0;
+  background: #0b1727;
+  color: #c8d6e5;
+}
+.viewport { width: 100%; overflow-x: auto; scrollbar-color: #38516c #0b1727; scrollbar-width: thin; }
+.viewport:focus-visible { outline: 2px solid #82bafa; outline-offset: -3px; }
+.plan { display: block; width: 100%; min-width: 860px; height: auto; font-family: var(--font-sans), sans-serif; }
+.zoneCaption { fill: #91a8bf; font-size: 9px; letter-spacing: 1.2px; font-weight: 600; }
+.warehouseTitle { fill: #d9e7f5; font-size: 10.5px; font-weight: 600; }
+.smallLabel { fill: #91a6bc; font-size: 8.2px; letter-spacing: .55px; font-weight: 500; }
+.secondary { fill: #99aec4; font-size: 9px; font-weight: 400; }
+.counter { fill: #e0ecf7; font-size: 25px; font-weight: 600; letter-spacing: -.7px; font-variant-numeric: tabular-nums; }
+.warehouseStatus { font-size: 8px; font-weight: 500; }
+.microLabel { fill: #a1b4c5; font-size: 7px; }
+.productionLine { cursor: pointer; outline: none; }
+.productionLine:hover .lineSurface { stroke: var(--line-color); }
+.productionLine:focus-visible .lineSurface { stroke: #f6e3a7; stroke-width: 3px; stroke-dasharray: 5 3; }
+.lineTitle { font-size: 11px; font-weight: 600; letter-spacing: .2px; }
+.family { fill: #a9bdd1; font-size: 9.5px; }
+.lineStatus { fill: #c8d8e8; font-size: 9px; }
+.stageLabel { fill: #c6d8e9; font-size: 10px; font-weight: 500; }
+.queueLabel { fill: #d3e5f5; font-size: 8px; font-variant-numeric: tabular-nums; }
+.serviceLabel { fill: #a5b9ce; font-size: 9.5px; }
+.shiftValue { fill: #d8e7f5; font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.caption { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 14px 22px; border-top: 1px solid #26384d; background: #102034; }
+.legend { display: flex; flex-wrap: wrap; column-gap: 15px; row-gap: 8px; margin: 0; padding: 0; list-style: none; }
+.legend li { display: flex; align-items: center; gap: 5px; color: #b4c6d9; font-size: 10px; }
+.legend li span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.caption p { margin: 0; color: #98b0c8; font-size: 10px; }
+.caption p span { margin-left: 4px; }
+.mobileHint { display: none; }
+
+@media (max-width: 800px) {
+  .caption { padding: 13px 16px; }
+  .legend { column-gap: 13px; }
+  .mobileHint { display: block; margin: 0; padding: 9px 16px 0; color: #8fa7c1; font-size: 10px; }
+}

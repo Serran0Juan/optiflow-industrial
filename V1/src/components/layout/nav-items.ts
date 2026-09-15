@@ -2,6 +2,7 @@ import {
   BookOpen,
   Boxes,
   CalendarRange,
+  Factory,
   LayoutDashboard,
   Radar,
   Scale,
@@ -24,6 +25,13 @@ export const NAV_ITEMS: NavItem[] = [
     shortLabel: "Dashboard",
     description: "Resultado economico y operativo de la semana planificada.",
     icon: LayoutDashboard,
+  },
+  {
+    href: "/planta",
+    label: "Planta en movimiento",
+    shortLabel: "Planta",
+    description: "Recorre las tres líneas y simula el flujo de una jornada.",
+    icon: Factory,
   },
   {
     href: "/plan",

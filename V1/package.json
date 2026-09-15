@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "verify": "tsx scripts/verify.ts"
+    "verify": "tsx scripts/verify.ts",
+    "verify:plant": "tsx scripts/verify-plant.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
